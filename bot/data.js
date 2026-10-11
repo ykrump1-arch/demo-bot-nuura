@@ -11,7 +11,7 @@ const DEFAULT = {
     name: 'NUURA',
     city: 'Ташкент',
     hours: { start: '09:00', end: '20:00' },
-    stepMin: 30,        // шаг сетки времени
+    stepMin: 90,        // шаг сетки времени (1,5 часа)
     horizonDays: 14,    // на сколько дней вперёд можно записаться
   },
   services: [
@@ -39,6 +39,8 @@ function load() {
     db = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     // на случай если добавились новые поля
     db.salon = Object.assign({}, DEFAULT.salon, db.salon);
+    // шаг сетки всегда берём из настроек кода, а не из старого файла
+    db.salon.stepMin = Number(process.env.STEP_MIN || DEFAULT.salon.stepMin);
     db.closed = db.closed || {};
     db.bookings = db.bookings || [];
     db.seq = db.seq || 1;
