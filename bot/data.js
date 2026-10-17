@@ -1,73 +1,75 @@
-// Данные салона и записи. Хранятся в JSON-файле.
+// Данные салонов.
+//   Справочник (услуги, мастера, часы) — файл salons/<id>.json в репозитории.
+//   Записи клиентов — файл на диске сервера, живут отдельно и не теряются.
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = process.env.DATA_DIR || __dirname;
-const FILE = path.join(DATA_DIR, 'store.json');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const SALONS_DIR = path.join(__dirname, 'salons');
 
-// ---------- начальные данные демо-салона ----------
-const DEFAULT = {
+// если справочника нет — берём этот шаблон
+const TEMPLATE = {
   salon: {
-    name: 'NUURA',
+    name: 'Салон',
     city: 'Ташкент',
     hours: { start: '09:00', end: '20:00' },
-    stepMin: 90,        // шаг сетки времени (1,5 часа)
-    horizonDays: 14,    // на сколько дней вперёд можно записаться
+    stepMin: 90,
+    horizonDays: 14,
   },
   services: [
     { id: 'manicure', name: 'Маникюр с покрытием', nameUz: 'Qoplamali manikyur',
       duration: 90, price: 180000 },
-    { id: 'brows',    name: 'Брови: коррекция и окрашивание', nameUz: 'Qosh: korreksiya va bo‘yash',
-      duration: 60, price: 120000 },
-    { id: 'lashes',   name: 'Наращивание ресниц', nameUz: 'Kiprik qo‘shish',
-      duration: 120, price: 250000 },
   ],
   masters: [
-    { id: 'sabina',  name: 'Сабина',  services: ['manicure', 'brows'],             workdays: [1,2,3,4,5,6] },
-    { id: 'aziza',   name: 'Азиза',   services: ['brows', 'lashes'],               workdays: [1,2,3,4,5] },
-    { id: 'gulnoza', name: 'Гулноза', services: ['manicure', 'brows', 'lashes'],   workdays: [2,3,4,5,6,0] },
+    { id: 'master1', name: 'Мастер', services: ['manicure'], workdays: [1,2,3,4,5,6] },
   ],
-  // вручную закрытые окна: { masterId: { 'YYYY-MM-DD': ['11:00', '13:30'] } }
-  closed: {},
-  // записи
-  bookings: [],
-  seq: 1,
 };
 
-let db = null;
+function ensureDir(dir) {
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+}
 
-function load() {
-  if (db) return db;
+// ---------- загрузка одного салона ----------
+function load(salonId) {
+  // 1. справочник из репозитория
+  let ref;
   try {
-    db = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    // на случай если добавились новые поля
-    db.salon = Object.assign({}, DEFAULT.salon, db.salon);
-    // шаг сетки всегда берём из настроек кода, а не из старого файла
-    db.salon.stepMin = Number(process.env.STEP_MIN || DEFAULT.salon.stepMin);
-    // справочники услуг и мастеров тоже живут в коде — чтобы правки доезжали
-    db.services = DEFAULT.services;
-    db.masters = DEFAULT.masters;
-    db.closed = db.closed || {};
-    db.bookings = db.bookings || [];
-    db.seq = db.seq || 1;
+    ref = JSON.parse(fs.readFileSync(path.join(SALONS_DIR, `${salonId}.json`), 'utf8'));
   } catch (e) {
-    db = JSON.parse(JSON.stringify(DEFAULT));
-    save();
+    console.warn(`[${salonId}] нет файла salons/${salonId}.json — беру шаблон`);
+    ref = JSON.parse(JSON.stringify(TEMPLATE));
   }
-  return db;
-}
 
-function save() {
+  // 2. записи с диска
+  ensureDir(DATA_DIR);
+  const file = path.join(DATA_DIR, `${salonId}.json`);
+  let live;
   try {
-    fs.writeFileSync(FILE, JSON.stringify(db, null, 2));
+    live = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (e) {
-    console.error('Не смог сохранить данные:', e.message);
+    live = { bookings: [], closed: {}, seq: 1 };
   }
+
+  const db = {
+    salon: Object.assign({}, TEMPLATE.salon, ref.salon),
+    services: ref.services || TEMPLATE.services,
+    masters: ref.masters || TEMPLATE.masters,
+    bookings: live.bookings || [],
+    closed: live.closed || {},
+    seq: live.seq || 1,
+  };
+
+  function save() {
+    try {
+      fs.writeFileSync(file, JSON.stringify({
+        bookings: db.bookings, closed: db.closed, seq: db.seq,
+      }, null, 2));
+    } catch (e) {
+      console.error(`[${salonId}] не смог сохранить записи:`, e.message);
+    }
+  }
+
+  return { db, save };
 }
 
-function reset() {
-  db = JSON.parse(JSON.stringify(DEFAULT));
-  save();
-}
-
-module.exports = { load, save, reset, DEFAULT };
+module.exports = { load, TEMPLATE, DATA_DIR, SALONS_DIR };
