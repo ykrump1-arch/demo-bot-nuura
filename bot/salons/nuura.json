@@ -1,0 +1,22 @@
+{
+  "salon": {
+    "name": "NUURA",
+    "city": "Ташкент",
+    "hours": { "start": "09:00", "end": "20:00" },
+    "stepMin": 90,
+    "horizonDays": 14
+  },
+  "services": [
+    { "id": "manicure", "name": "Маникюр с покрытием", "nameUz": "Qoplamali manikyur",
+      "duration": 90, "price": 180000 },
+    { "id": "brows", "name": "Брови: коррекция и окрашивание", "nameUz": "Qosh: korreksiya va bo‘yash",
+      "duration": 60, "price": 120000 },
+    { "id": "lashes", "name": "Наращивание ресниц", "nameUz": "Kiprik qo‘shish",
+      "duration": 120, "price": 250000 }
+  ],
+  "masters": [
+    { "id": "sabina",  "name": "Сабина",  "services": ["manicure", "brows"],           "workdays": [1,2,3,4,5,6] },
+    { "id": "aziza",   "name": "Азиза",   "services": ["brows", "lashes"],             "workdays": [1,2,3,4,5] },
+    { "id": "gulnoza", "name": "Гулноза", "services": ["manicure", "brows", "lashes"], "workdays": [2,3,4,5,6,0] }
+  ]
+}
