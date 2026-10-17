@@ -1,0 +1,18 @@
+{
+  "salon": {
+    "name": "TEST",
+    "city": "Ташкент",
+    "hours": { "start": "10:00", "end": "19:00" },
+    "stepMin": 60,
+    "horizonDays": 7
+  },
+  "services": [
+    { "id": "haircut", "name": "Стрижка", "nameUz": "Soch olish",
+      "duration": 60, "price": 90000 },
+    { "id": "color", "name": "Окрашивание", "nameUz": "Bo‘yash",
+      "duration": 120, "price": 350000 }
+  ],
+  "masters": [
+    { "id": "dilnoza", "name": "Дильноза", "services": ["haircut", "color"], "workdays": [1,2,3,4,5,6] }
+  ]
+}
