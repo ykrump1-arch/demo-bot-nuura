@@ -822,10 +822,18 @@ module.exports = function createSalon(cfg) {
       kb.text(`${mark} ${s.time}`, s.state === 'booked' ? 'a_noop' : `a_tg_${mid}_${date}_${s.time}`);
       if (i % 4 === 3) kb.row();
     });
+    const openCount = slots.filter(x => x.state === 'free').length;
+    const booked = slots.filter(x => x.state === 'booked').length;
+
+    kb.row();
+    if (openCount) kb.text('🚫 Закрыть день', `a_dall_${mid}_${date}`);
+    if (openCount < slots.length - booked) kb.text('✅ Открыть день', `a_dnone_${mid}_${date}`);
     kb.row().text('← К мастерам', 'a_sched_back');
+
     const text = `<b>${masterName(mid)} · ${T.prettyDate(date)}</b>\n\n` +
                  `🟢 свободно · ⚪️ закрыто · 🔴 занято\n` +
-                 `Нажмите на время, чтобы открыть или закрыть окно.`;
+                 (booked ? `\n<b>Записей на этот день: ${booked}</b> — они остаются, их нужно перенести отдельно.\n` : '') +
+                 `\nНажмите на время, чтобы открыть или закрыть окно.`;
     try { await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }); } catch (e) {}
   }
 
@@ -848,6 +856,30 @@ module.exports = function createSalon(cfg) {
     if (i >= 0) arr.splice(i, 1); else arr.push(time);
     save();
     await ctx.answerCallbackQuery(i >= 0 ? 'Открыто' : 'Закрыто');
+    await showDay(ctx, mid, date);
+  });
+
+  // закрыть весь день одной кнопкой
+  bot.callbackQuery(/^a_dall_([^_]+)_(.+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    const [, mid, date] = ctx.match;
+    db.closed[mid] = db.closed[mid] || {};
+    db.closed[mid][date] = T.daySlots(db, mid, date)
+      .filter(s => s.state !== 'booked')
+      .map(s => s.time);
+    save();
+    const booked = T.daySlots(db, mid, date).filter(s => s.state === 'booked').length;
+    await ctx.answerCallbackQuery(booked ? `День закрыт. Записей на нём: ${booked}` : 'День закрыт');
+    await showDay(ctx, mid, date);
+  });
+
+  // открыть весь день обратно
+  bot.callbackQuery(/^a_dnone_([^_]+)_(.+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    const [, mid, date] = ctx.match;
+    if (db.closed[mid]) delete db.closed[mid][date];
+    save();
+    await ctx.answerCallbackQuery('День открыт');
     await showDay(ctx, mid, date);
   });
 
