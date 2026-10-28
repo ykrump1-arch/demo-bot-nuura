@@ -51,6 +51,7 @@ module.exports = function createSalon(cfg) {
     stats: '📊 Статистика',
     export: '⬇️ Выгрузка',
     settings: '⚙️ Настройки',
+    bcast: '📣 Рассылка',
   };
 
   function clientKb() {
@@ -63,7 +64,8 @@ module.exports = function createSalon(cfg) {
     return new Keyboard()
       .text(BTN.sched).text(BTN.books).row()
       .text(BTN.clients).text(BTN.stats).row()
-      .text(BTN.export).text(BTN.settings)
+      .text(BTN.export).text(BTN.settings).row()
+      .text(BTN.bcast)
       .resized().persistent();
   }
   const kbFor = id => (isAdmin(id) ? adminKb() : clientKb());
@@ -399,6 +401,7 @@ module.exports = function createSalon(cfg) {
   //  /start — вход
   // ============================================================
   bot.command('start', async ctx => {
+    touchUser(ctx);
     const payload = (ctx.match || '').trim();
 
     // пришёл по ссылке с сайта — подключаем напоминание
@@ -429,6 +432,121 @@ module.exports = function createSalon(cfg) {
   // ============================================================
   //  ОБРАБОТКА НАЖАТИЙ НА КНОПКИ ВНИЗУ + ввод имени/телефона
   // ============================================================
+  // ============================================================
+  //  РАССЫЛКА: админ пишет одно сообщение — оно уходит всем клиентам
+  // ============================================================
+  const bcast = new Map();                       // чат админа -> черновик рассылки
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // запоминаем всех, кто писал боту
+  function touchUser(ctx) {
+    const id = ctx.chat && ctx.chat.id;
+    if (!id || (ctx.chat.type && ctx.chat.type !== 'private')) return;
+    const now = new Date().toISOString();
+    let u = db.users.find(x => x.id === id);
+    if (!u) {
+      u = { id, name: '', username: '', since: now, lastSeen: now, blocked: false };
+      db.users.push(u);
+    } else if (u.lastSeen && now.slice(0, 13) === u.lastSeen.slice(0, 13) && !u.blocked) {
+      return;                                     // в этот же час уже отмечали — не трогаем файл
+    }
+    if (ctx.from) {
+      u.name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || u.name;
+      u.username = ctx.from.username || u.username;
+    }
+    u.lastSeen = now;
+    u.blocked = false;
+    save();
+  }
+
+  // кому отправляем: все, кто писал боту, плюс те, кто пришёл по ссылке с сайта
+  function audience() {
+    const out = new Map();
+    db.users.forEach(u => { if (!isAdmin(u.id)) out.set(u.id, u); });
+    db.bookings.forEach(b => {
+      if (b.chatId && !isAdmin(b.chatId) && !out.has(b.chatId)) out.set(b.chatId, { id: b.chatId, name: b.name });
+    });
+    return [...out.values()];
+  }
+
+  bot.on('message', async (ctx, next) => {
+    touchUser(ctx);
+
+    const st = bcast.get(ctx.chat.id);
+    if (!st || !isAdmin(ctx.from.id)) return next();
+
+    const txt = ctx.message.text ? ctx.message.text.trim() : '';
+    if (txt && (Object.values(BTN).includes(txt) || txt.startsWith('/'))) {
+      bcast.delete(ctx.chat.id);                  // нажал другую кнопку — выходим из рассылки
+      return next();
+    }
+
+    const people = audience();
+    bcast.set(ctx.chat.id, { msgId: ctx.message.message_id, ready: true });
+
+    if (!people.length) {
+      bcast.delete(ctx.chat.id);
+      return ctx.reply('Пока некому отправлять: ни один клиент не писал боту.',
+        { reply_markup: adminKb() });
+    }
+
+    await ctx.reply(
+      `👆 Вот так это увидят клиенты.\n\nПолучателей: <b>${people.length}</b>`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text(`📣 Отправить (${people.length})`, 'bc_send').row()
+          .text('Отмена', 'bc_cancel'),
+      }
+    );
+  });
+
+  bot.callbackQuery('bc_cancel', async ctx => {
+    bcast.delete(ctx.chat.id);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Рассылка отменена.');
+  });
+
+  bot.callbackQuery('bc_send', async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    const st = bcast.get(ctx.chat.id);
+    if (!st || !st.ready) {
+      await ctx.answerCallbackQuery({ text: 'Сообщение потерялось, начните заново', show_alert: true });
+      return;
+    }
+    bcast.delete(ctx.chat.id);
+    await ctx.answerCallbackQuery();
+
+    const people = audience();
+    await ctx.editMessageText(`Отправляю… 0 из ${people.length}`);
+
+    let ok = 0, fail = 0;
+    for (const p of people) {
+      try {
+        await bot.api.copyMessage(p.id, ctx.chat.id, st.msgId);
+        ok++;
+      } catch (e) {
+        fail++;
+        const u = db.users.find(x => x.id === p.id);
+        if (u && /blocked|deactivated|chat not found|user is deactivated/i.test(e.message || '')) u.blocked = true;
+        const wait = e.parameters && e.parameters.retry_after;
+        if (wait) await sleep((wait + 1) * 1000);
+      }
+      await sleep(40);                             // ~25 сообщений в секунду — лимит телеграма
+      if ((ok + fail) % 25 === 0) {
+        try { await ctx.editMessageText(`Отправляю… ${ok + fail} из ${people.length}`); } catch (e) {}
+      }
+    }
+    save();
+    log(`рассылка: ${ok} доставлено, ${fail} нет`);
+
+    await ctx.reply(
+      `Готово.\n\nДоставлено: <b>${ok}</b>` +
+      (fail ? `\nНе дошло: ${fail} — эти люди заблокировали бота.` : ''),
+      { parse_mode: 'HTML', reply_markup: adminKb() }
+    );
+  });
+
   bot.on('message:contact', async ctx => {
     const d = draft.get(ctx.chat.id);
     if (!d || d.step !== 'phone') return;
@@ -495,6 +613,18 @@ module.exports = function createSalon(cfg) {
       if (txt === BTN.stats)    { const v = viewStats();    return ctx.reply(v.text, { parse_mode: 'HTML' }); }
       if (txt === BTN.settings) { const v = viewSettings(); return ctx.reply(v.text, { parse_mode: 'HTML' }); }
       if (txt === BTN.export)   return exportCsv(ctx);
+      if (txt === BTN.bcast) {
+        const n = audience().length;
+        bcast.set(ctx.chat.id, {});
+        return ctx.reply(
+          `<b>Рассылка</b>\n\n` +
+          `Пришлите сообщение — текст, фото, видео, что угодно. Я покажу, как оно будет выглядеть, ` +
+          `и спрошу подтверждение.\n\n` +
+          `Сейчас получателей: <b>${n}</b>\n` +
+          `<i>Это те, кто когда-либо писал боту.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      }
     }
 
     // --- всё остальное ---
