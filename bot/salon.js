@@ -145,22 +145,143 @@ module.exports = function createSalon(cfg) {
     return { text: 'Выберите мастера:', kb };
   }
 
-  function viewClients() {
+  // ============================================================
+  //  КАРТОЧКА КЛИЕНТА
+  //  Клиенты собираются из записей, ключ — телефон (только цифры).
+  //  Заметка живёт в db.clients[телефон].note
+  // ============================================================
+  const digits = v => String(v || '').replace(/\D/g, '');
+  const PER_PAGE = 8;
+
+  function clientsIndex() {
     const map = new Map();
     db.bookings.forEach(b => {
-      if (!map.has(b.phone)) map.set(b.phone, { name: b.name, phone: b.phone, count: 0, last: '' });
-      const c = map.get(b.phone);
-      c.count++;
-      if (b.date > c.last) c.last = b.date;
+      const key = digits(b.phone);
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, { key, name: b.name, phone: b.phone, count: 0, cancelled: 0, sum: 0,
+                       first: b.date, last: b.date, visits: [] });
+      }
+      const c = map.get(key);
+      c.visits.push(b);
+      if (b.status === 'active') { c.count++; c.sum += b.price || 0; } else c.cancelled++;
+      if (b.date > c.last) { c.last = b.date; c.name = b.name || c.name; }
+      if (b.date < c.first) c.first = b.date;
     });
-    const list = [...map.values()].sort((a, b) => b.count - a.count).slice(0, 30);
-    let text = `<b>Клиенты · ${map.size}</b>\n\n`;
-    if (!list.length) text += 'Пока пусто.';
-    list.forEach(c => {
-      text += `${esc(c.name)} — ${esc(c.phone)}\n<i>визитов: ${c.count}, последний ${T.shortDate(c.last)}</i>\n\n`;
-    });
-    return { text, kb: new InlineKeyboard() };
+    return map;
   }
+
+  function clientsSorted() {
+    return [...clientsIndex().values()].sort((a, b) => b.last.localeCompare(a.last));
+  }
+
+  // список клиентов страницами
+  function viewClients(page = 0, found = null) {
+    const all = found || clientsSorted();
+    const pages = Math.max(1, Math.ceil(all.length / PER_PAGE));
+    const p = Math.min(Math.max(0, page), pages - 1);
+    const slice = all.slice(p * PER_PAGE, p * PER_PAGE + PER_PAGE);
+
+    let text = found
+      ? `<b>Нашёл: ${all.length}</b>\n\n`
+      : `<b>Клиенты · ${all.length}</b>\n\n`;
+    if (!slice.length) text += 'Пока пусто.';
+    else text += '<i>Нажмите на клиента, чтобы открыть карточку.</i>';
+
+    const kb = new InlineKeyboard();
+    slice.forEach(c => {
+      const note = (db.clients[c.key] && db.clients[c.key].note) ? ' 📝' : '';
+      kb.text(`${c.name || 'Без имени'} · ${c.count}${note}`, `ac_c_${c.key}`).row();
+    });
+    if (!found && pages > 1) {
+      if (p > 0) kb.text('‹ Назад', `ac_l_${p - 1}`);
+      kb.text(`${p + 1}/${pages}`, 'ac_noop');
+      if (p < pages - 1) kb.text('Вперёд ›', `ac_l_${p + 1}`);
+      kb.row();
+    }
+    kb.text('🔎 Найти клиента', 'ac_find');
+    return { text, kb };
+  }
+
+  // карточка одного
+  function viewClient(key) {
+    const c = clientsIndex().get(key);
+    if (!c) return { text: 'Клиент не найден.', kb: new InlineKeyboard().text('‹ К списку', 'ac_l_0') };
+
+    const today = T.nowTashkent().date;
+    const next = c.visits
+      .filter(b => b.status === 'active' && b.date >= today)
+      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
+
+    let text = `👤 <b>${esc(c.name || 'Без имени')}</b>\n${esc(c.phone)}\n\n`;
+    text += `Визитов: <b>${c.count}</b> · на ${money(c.sum)} сум\n`;
+    if (c.count > 1) text += `Средний чек: ${money(Math.round(c.sum / c.count))} сум\n`;
+    const past0 = c.visits.filter(b => b.date <= today).map(b => b.date).sort();
+    text += past0.length
+      ? `Первый визит: ${T.shortDate(past0[0])} · последний: ${T.shortDate(past0[past0.length - 1])}\n`
+      : `Ещё не приходил(а)\n`;
+    if (c.cancelled) text += `Отмен: ${c.cancelled}\n`;
+    if (next) text += `\n📅 Записан: <b>${T.prettyDate(next.date)}, ${next.time}</b>\n`;
+
+    const note = db.clients[key] && db.clients[key].note;
+    if (note) text += `\n📝 <b>Заметка</b>\n${esc(note)}\n`;
+
+    const past = c.visits
+      .filter(b => b.date <= today)
+      .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
+      .slice(0, 8);
+    if (past.length) {
+      text += `\n<b>История</b>\n`;
+      past.forEach(b => {
+        const mark = b.status === 'active' ? '' : ' <i>(отменён)</i>';
+        text += `${T.shortDate(b.date)} · ${esc(serviceName(b.service))} · ${esc(masterName(b.master))} · ${money(b.price)}${mark}\n`;
+      });
+    }
+
+    const kb = new InlineKeyboard()
+      .text(note ? '📝 Изменить заметку' : '📝 Добавить заметку', `ac_n_${key}`).row()
+      .text('‹ К списку', 'ac_l_0');
+    return { text, kb };
+  }
+
+  bot.callbackQuery(/^ac_l_(\d+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    const v = viewClients(Number(ctx.match[1]));
+    try { await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+    catch (e) { await ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+  });
+
+  bot.callbackQuery(/^ac_c_(\d+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    const v = viewClient(ctx.match[1]);
+    try { await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+    catch (e) { await ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+  });
+
+  bot.callbackQuery(/^ac_n_(\d+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    const key = ctx.match[1];
+    adminIn.set(ctx.chat.id, { kind: 'note', key });
+    const cur = db.clients[key] && db.clients[key].note;
+    await ctx.reply(
+      `Напишите заметку об этом клиенте.\n` +
+      (cur ? `\nСейчас записано:\n<i>${esc(cur)}</i>\n` : '') +
+      `\nЧтобы стереть — отправьте минус: <code>-</code>`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.callbackQuery('ac_noop', ctx => ctx.answerCallbackQuery());
+
+  bot.callbackQuery('ac_find', async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    adminIn.set(ctx.chat.id, { kind: 'search' });
+    await ctx.reply('Напишите имя или часть номера телефона.');
+  });
 
   function viewStats() {
     const all = db.bookings;
@@ -439,6 +560,7 @@ module.exports = function createSalon(cfg) {
   //  РАССЫЛКА: админ пишет одно сообщение — оно уходит всем клиентам
   // ============================================================
   const bcast = new Map();                       // чат админа -> черновик рассылки
+  const adminIn = new Map();                     // чат админа -> что сейчас вводит (заметка, поиск)
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // запоминаем всех, кто писал боту
@@ -476,6 +598,38 @@ module.exports = function createSalon(cfg) {
 
   bot.on('message', async (ctx, next) => {
     touchUser(ctx);
+
+    // --- админ вводит заметку или ищет клиента ---
+    const inp = adminIn.get(ctx.chat.id);
+    if (inp && isAdmin(ctx.from.id) && ctx.message.text) {
+      const val = ctx.message.text.trim();
+      if (Object.values(BTN).includes(val) || val.startsWith('/')) {
+        adminIn.delete(ctx.chat.id);
+        return next();
+      }
+      adminIn.delete(ctx.chat.id);
+
+      if (inp.kind === 'note') {
+        if (val === '-') delete db.clients[inp.key];
+        else db.clients[inp.key] = { note: val.slice(0, 400), updatedAt: new Date().toISOString() };
+        save();
+        const v = viewClient(inp.key);
+        return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
+      }
+
+      if (inp.kind === 'search') {
+        const q = val.toLowerCase();
+        const qd = digits(val);
+        const found = clientsSorted().filter(c =>
+          (c.name || '').toLowerCase().includes(q) || (qd && c.key.includes(qd)));
+        if (!found.length) {
+          return ctx.reply('Никого не нашёл. Попробуйте по-другому.',
+            { reply_markup: new InlineKeyboard().text('‹ К списку', 'ac_l_0') });
+        }
+        const v = viewClients(0, found);
+        return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
+      }
+    }
 
     const st = bcast.get(ctx.chat.id);
     if (!st || !isAdmin(ctx.from.id)) return next();
@@ -617,7 +771,7 @@ module.exports = function createSalon(cfg) {
     if (admin) {
       if (txt === BTN.books)    { const v = viewBooks();    return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
       if (txt === BTN.sched)    { const v = viewMasters();  return ctx.reply(v.text, { reply_markup: v.kb }); }
-      if (txt === BTN.clients)  { const v = viewClients();  return ctx.reply(v.text, { parse_mode: 'HTML' }); }
+      if (txt === BTN.clients)  { const v = viewClients(0); return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
       if (txt === BTN.stats)    { const v = viewStats();    return ctx.reply(v.text, { parse_mode: 'HTML' }); }
       if (txt === BTN.settings) { const v = viewSettings(); return ctx.reply(v.text, { parse_mode: 'HTML' }); }
       if (txt === BTN.export)   return exportCsv(ctx);
