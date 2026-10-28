@@ -187,7 +187,10 @@ module.exports = function createSalon(cfg) {
   function viewSettings() {
     let text = `<b>Настройки</b>\n\n`;
     text += `Часы работы: ${db.salon.hours.start}–${db.salon.hours.end}\n`;
-    text += `Шаг записи: ${db.salon.stepMin} мин\nГоризонт: ${db.salon.horizonDays} дней\n\n`;
+    text += `Шаг записи: ${db.salon.stepMin} мин\nГоризонт: ${db.salon.horizonDays} дней\n`;
+    text += db.salon.rebookDays
+      ? `Напоминание о повторе: через ${db.salon.rebookDays} дн.\n\n`
+      : `Напоминание о повторе: выключено\n\n`;
     text += `<b>Услуги</b>\n`;
     db.services.forEach(s => { text += `${esc(s.name)} — ${s.duration} мин, ${money(s.price)} сум\n`; });
     text += `\n<b>Мастера</b>\n`;
@@ -462,9 +465,11 @@ module.exports = function createSalon(cfg) {
   // кому отправляем: все, кто писал боту, плюс те, кто пришёл по ссылке с сайта
   function audience() {
     const out = new Map();
-    db.users.forEach(u => { if (!isAdmin(u.id)) out.set(u.id, u); });
+    db.users.forEach(u => { if (!isAdmin(u.id) && !u.blocked) out.set(u.id, u); });
+    const blocked = new Set(db.users.filter(u => u.blocked).map(u => u.id));
     db.bookings.forEach(b => {
-      if (b.chatId && !isAdmin(b.chatId) && !out.has(b.chatId)) out.set(b.chatId, { id: b.chatId, name: b.name });
+      if (b.chatId && !isAdmin(b.chatId) && !blocked.has(b.chatId) && !out.has(b.chatId))
+        out.set(b.chatId, { id: b.chatId, name: b.name });
     });
     return [...out.values()];
   }
@@ -527,8 +532,11 @@ module.exports = function createSalon(cfg) {
         ok++;
       } catch (e) {
         fail++;
-        const u = db.users.find(x => x.id === p.id);
-        if (u && /blocked|deactivated|chat not found|user is deactivated/i.test(e.message || '')) u.blocked = true;
+        if (/blocked|deactivated|chat not found|user is deactivated/i.test(e.message || '')) {
+          let u = db.users.find(x => x.id === p.id);
+          if (!u) { u = { id: p.id, since: new Date().toISOString() }; db.users.push(u); }
+          u.blocked = true;
+        }
         const wait = e.parameters && e.parameters.retry_after;
         if (wait) await sleep((wait + 1) * 1000);
       }
@@ -760,6 +768,109 @@ module.exports = function createSalon(cfg) {
       }
     }
   }, 60000);
+  // ============================================================
+  //  НАПОМИНАНИЕ О ПОВТОРНОЙ ЗАПИСИ
+  //  Через N дней после визита бот пишет: пора обновить?
+  //  Срок берём из salons/<id>.json: salon.rebookDays (по умолчанию 14).
+  //  Для отдельной услуги можно задать свой: services[].rebookDays
+  // ============================================================
+  function plural(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+
+  function daysBetween(from, to) {
+    return Math.round((new Date(to + 'T00:00:00Z') - new Date(from + 'T00:00:00Z')) / 86400000);
+  }
+
+  // через сколько дней напоминать по этой записи
+  function rebookDaysFor(b) {
+    const base = Number(db.salon.rebookDays || 0);
+    let n = 0;
+    T.svcIds(b.services || b.service).forEach(id => {
+      const s = db.services.find(x => x.id === id);
+      if (s && s.rebookDays) n = Math.max(n, Number(s.rebookDays));
+    });
+    return n || base;
+  }
+
+  async function rebookPass() {
+    const now = T.nowTashkent();
+    const hour = Number(db.salon.rebookHour != null ? db.salon.rebookHour : 12);
+    if (now.min < hour * 60) return;              // рано, ждём до полудня
+
+    for (const b of db.bookings) {
+      if (b.status !== 'active' || !b.chatId || b.rebookSentAt) continue;
+
+      const need = rebookDaysFor(b);
+      if (!need) continue;
+
+      const passed = daysBetween(b.date, now.date);
+      if (passed < need || passed > need + 3) continue;   // окно: день в день и три дня на догон
+
+      // не трогаем тех, кто уже записан наперёд
+      const hasNext = db.bookings.some(x =>
+        x.chatId === b.chatId && x.status === 'active' && x.date > b.date);
+      if (hasNext) { b.rebookSentAt = 'skip'; save(); continue; }
+
+      // клиент мог попросить не напоминать
+      const u = db.users.find(x => x.id === b.chatId);
+      if (u && u.noRebook) { b.rebookSentAt = 'off'; save(); continue; }
+
+      const name = (b.name || '').split(' ')[0];
+      try {
+        await bot.api.sendMessage(b.chatId,
+          (name ? `${esc(name)}, здравствуйте!\n\n` : 'Здравствуйте!\n\n') +
+          `Прошло ${passed} ${plural(passed, 'день', 'дня', 'дней')} с вашего визита — ` +
+          `${esc(serviceName(b.service))}.\n` +
+          `Если пора обновить, можно записаться прямо здесь.`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: new InlineKeyboard()
+              .text('📅 Записаться', 'rb_go').row()
+              .text('Не напоминать', 'rb_off'),
+          });
+        // помечаем всю цепочку визита, чтобы не написать дважды
+        db.bookings.forEach(x => {
+          if (x === b || (b.group && x.group === b.group)) x.rebookSentAt = new Date().toISOString();
+        });
+        save();
+        log('напомнил о повторной записи:', b.chatId);
+      } catch (e) {
+        b.rebookSentAt = 'error';
+        if (/blocked|deactivated|chat not found/i.test(e.message || '')) {
+          let uu = db.users.find(x => x.id === b.chatId);
+          if (!uu) { uu = { id: b.chatId, since: new Date().toISOString() }; db.users.push(uu); }
+          uu.blocked = true;
+        }
+        save();
+      }
+      await sleep(60);
+    }
+  }
+
+  bot.callbackQuery('rb_go', async ctx => {
+    await ctx.answerCallbackQuery();
+    try { await ctx.editMessageReplyMarkup(); } catch (e) {}
+    return startBooking(ctx);
+  });
+
+  bot.callbackQuery('rb_off', async ctx => {
+    await ctx.answerCallbackQuery();
+    let u = db.users.find(x => x.id === ctx.chat.id);
+    if (!u) { u = { id: ctx.chat.id, since: new Date().toISOString() }; db.users.push(u); }
+    u.noRebook = true;
+    save();
+    try { await ctx.editMessageReplyMarkup(); } catch (e) {}
+    await ctx.reply('Хорошо, больше не буду напоминать. Записаться всегда можно кнопкой внизу.',
+      { reply_markup: clientKb() });
+  });
+
+  setInterval(() => { rebookPass().catch(e => console.error('повторная запись:', e.message)); }, 10 * 60000);
+
   // ---------- запуск ----------
   bot.catch(err => console.error(`[${cfg.id}] ошибка бота:`, err));
   bot.api.setMyCommands([{ command: 'start', description: 'Начать' }]).catch(() => {});
@@ -772,7 +883,7 @@ module.exports = function createSalon(cfg) {
     name: db.salon.name,
     username: BOT_USERNAME,
     db, save,
-    createBooking,
+    createBooking, rebookPass,
     serviceName, masterName, servicePrice,
   };
 };
