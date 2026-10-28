@@ -13,7 +13,9 @@
     "tagline": "студия маникюра",
     "taglineUz": "manikyur studiyasi",
     "heroTitle": "Руки, на которые <i>хочется смотреть</i>",
-    "heroTitleUz": "Ko‘z quvonadigan <i>qo‘llar</i>"
+    "heroTitleUz": "Ko‘z quvonadigan <i>qo‘llar</i>",
+    "rebookDays": 14,
+    "rebookHour": 12
   },
   "services": [
     {
