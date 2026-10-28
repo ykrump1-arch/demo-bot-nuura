@@ -49,7 +49,7 @@ function load(salonId) {
   try {
     live = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (e) {
-    live = { bookings: [], closed: {}, seq: 1, users: [] };
+    live = { bookings: [], closed: {}, seq: 1, users: [], clients: {} };
   }
 
   const db = {
@@ -60,12 +60,13 @@ function load(salonId) {
     closed: live.closed || {},
     seq: live.seq || 1,
     users: live.users || [],      // кто писал боту — для рассылки
+    clients: live.clients || {},  // заметки о клиентах: телефон -> { note }
   };
 
   function save() {
     try {
       fs.writeFileSync(file, JSON.stringify({
-        bookings: db.bookings, closed: db.closed, seq: db.seq, users: db.users,
+        bookings: db.bookings, closed: db.closed, seq: db.seq, users: db.users, clients: db.clients,
       }, null, 2));
     } catch (e) {
       console.error(`[${salonId}] не смог сохранить записи:`, e.message);
