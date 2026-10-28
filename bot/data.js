@@ -15,6 +15,8 @@ const TEMPLATE = {
     hours: { start: '09:00', end: '20:00' },
     stepMin: 90,
     horizonDays: 14,
+    rebookDays: 14,        // через сколько дней напомнить о повторной записи (0 — не напоминать)
+    rebookHour: 12,        // в котором часу отправлять
   },
   services: [
     { id: 'manicure', name: 'Маникюр с покрытием', nameUz: 'Qoplamali manikyur',
