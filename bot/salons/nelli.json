@@ -1,0 +1,68 @@
+{
+  "salon": {
+    "name": "Nelli Nails",
+    "city": "Ташкент",
+    "hours": { "start": "09:00", "end": "20:00" },
+    "stepMin": 30,
+    "horizonDays": 14,
+    "address": "",
+    "phone": "+998 90 325 08 05",
+    "tagline": "маникюр · педикюр · подология",
+    "taglineUz": "manikyur · pedikyur · podologiya",
+    "rebookDays": 21,
+    "rebookHour": 12
+  },
+  "services": [
+    { "id": "man_hyg",    "name": "Маникюр гигиена",                 "nameUz": "Gigiyenik manikyur",              "duration": 60,  "price": 200000 },
+    { "id": "man_cover",  "name": "Маникюр с покрытием (короткие)",  "nameUz": "Qoplamali manikyur (kalta)",      "duration": 120, "price": 300000 },
+    { "id": "man_ext",    "name": "Наращивание (от)",                "nameUz": "Tirnoq uzaytirish (dan)",         "duration": 180, "price": 400000 },
+    { "id": "man_corr",   "name": "Коррекция",                       "nameUz": "Korreksiya",                      "duration": 150, "price": 350000 },
+    { "id": "man_jp",     "name": "Японский маникюр",                "nameUz": "Yapon manikyuri",                 "duration": 60,  "price": 250000 },
+    { "id": "man_male",   "name": "Мужской маникюр",                 "nameUz": "Erkaklar manikyuri",              "duration": 60,  "price": 250000 },
+    { "id": "man_cut",    "name": "Стрижка ногтей (руки)",           "nameUz": "Tirnoq olish (qo‘l)",             "duration": 30,  "price": 100000 },
+    { "id": "man_remove", "name": "Снятие покрытия",                 "nameUz": "Qoplamani olib tashlash",         "duration": 30,  "price": 50000 },
+
+    { "id": "des_french", "name": "Дизайн: френч, втирка",           "nameUz": "Dizayn: french, surtma",          "duration": 15,  "price": 50000 },
+    { "id": "des_ombre",  "name": "Дизайн: омбре, градиент",         "nameUz": "Dizayn: ombre, gradiyent",        "duration": 20,  "price": 70000 },
+    { "id": "des_paint",  "name": "Рисунок от руки (1 палец)",       "nameUz": "Qo‘lda rasm (1 barmoq)",          "duration": 15,  "price": 10000 },
+    { "id": "des_stamp",  "name": "Стемпинг, слайдеры (1–2 п.)",     "nameUz": "Stemping, slayder (1–2 b.)",      "duration": 10,  "price": 5000 },
+    { "id": "des_lift",   "name": "Поднятие клюющих ногтей (1 п.)",  "nameUz": "Egilgan tirnoqni ko‘tarish (1 b.)", "duration": 10, "price": 10000 },
+    { "id": "des_repair", "name": "Ремонт ногтя",                    "nameUz": "Tirnoq ta’miri",                  "duration": 10,  "price": 10000 },
+
+    { "id": "ped_hyg",    "name": "Педикюр гигиена",                 "nameUz": "Gigiyenik pedikyur",              "duration": 90,  "price": 300000 },
+    { "id": "ped_cover",  "name": "Педикюр с покрытием",             "nameUz": "Qoplamali pedikyur",              "duration": 120, "price": 350000 },
+    { "id": "ped_male",   "name": "Педикюр мужской",                 "nameUz": "Erkaklar pedikyuri",              "duration": 90,  "price": 400000 },
+    { "id": "ped_toes",   "name": "Обработка пальчиков гигиена",     "nameUz": "Barmoqlarni gigiyenik ishlov",    "duration": 60,  "price": 250000 },
+
+    { "id": "pod_med1",   "name": "Педикюр медицинский (первый)",    "nameUz": "Tibbiy pedikyur (birinchi)",      "duration": 120, "price": 450000 },
+    { "id": "pod_med2",   "name": "Педикюр медицинский (последующий)", "nameUz": "Tibbiy pedikyur (keyingi)",     "duration": 90,  "price": 400000 },
+    { "id": "pod_hard",   "name": "Сложный педикюр (микоз и т.д.)",  "nameUz": "Murakkab pedikyur (mikoz va b.)", "duration": 120, "price": 500000 },
+    { "id": "pod_ti",     "name": "Установка титановой нити (б/п)",  "nameUz": "Titan ip o‘rnatish (bosh b.)",    "duration": 60,  "price": 300000 },
+    { "id": "pod_ti_cor", "name": "Коррекция титановой нити (б/п)",  "nameUz": "Titan ip korreksiyasi (bosh b.)", "duration": 30,  "price": 250000 },
+    { "id": "pod_ti_234", "name": "Установка ТН (2, 3, 4 палец)",    "nameUz": "Titan ip (2, 3, 4 barmoq)",       "duration": 30,  "price": 150000 },
+    { "id": "pod_corn",   "name": "Удаление стержневой мозоли",      "nameUz": "Sterjenli qadoqni olib tashlash", "duration": 30,  "price": 100000 },
+    { "id": "pod_wart",   "name": "Удаление бородавок (за ед.)",     "nameUz": "So‘gal olib tashlash (dona)",     "duration": 30,  "price": 100000 },
+    { "id": "pod_lysis",  "name": "Зачистка онихолизиса (б/п)",      "nameUz": "Onixolizis tozalash (bosh b.)",   "duration": 30,  "price": 100000 },
+    { "id": "pod_mycos",  "name": "Зачистка онихомикоза (б/п)",      "nameUz": "Onixomikoz tozalash (bosh b.)",   "duration": 30,  "price": 150000 },
+    { "id": "pod_gryph",  "name": "Зачистка онихогрифоза (б/п)",     "nameUz": "Onixogrifoz tozalash (bosh b.)",  "duration": 30,  "price": 150000 },
+    { "id": "pod_heels",  "name": "Обработка пяток (сложно)",        "nameUz": "Tovonga ishlov (murakkab)",       "duration": 60,  "price": 250000 },
+    { "id": "pod_ingrow", "name": "Иссечение вросшего ногтя",        "nameUz": "O‘sib kirgan tirnoqni kesish",    "duration": 30,  "price": 100000 },
+    { "id": "pod_cut",    "name": "Стрижка ногтей (ноги)",           "nameUz": "Tirnoq olish (oyoq)",             "duration": 30,  "price": 100000 },
+    { "id": "pod_test",   "name": "Забор на анализ",                 "nameUz": "Tahlil uchun namuna olish",       "duration": 30,  "price": 50000 },
+    { "id": "pod_relief", "name": "Разгрузка",                       "nameUz": "Yengillatish",                    "duration": 15,  "price": 10000 }
+  ],
+  "masters": [
+    {
+      "id": "nailya",
+      "name": "Наиля",
+      "services": [
+        "man_hyg", "man_cover", "man_ext", "man_corr", "man_jp", "man_male", "man_cut", "man_remove",
+        "des_french", "des_ombre", "des_paint", "des_stamp", "des_lift", "des_repair",
+        "ped_hyg", "ped_cover", "ped_male", "ped_toes",
+        "pod_med1", "pod_med2", "pod_hard", "pod_ti", "pod_ti_cor", "pod_ti_234", "pod_corn", "pod_wart",
+        "pod_lysis", "pod_mycos", "pod_gryph", "pod_heels", "pod_ingrow", "pod_cut", "pod_test", "pod_relief"
+      ],
+      "workdays": [1, 2, 3, 4, 5, 6]
+    }
+  ]
+}
