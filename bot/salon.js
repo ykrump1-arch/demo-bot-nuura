@@ -41,6 +41,23 @@ module.exports = function createSalon(cfg) {
     return m ? m.name : id;
   }
 
+  // ------------------------------------------------------------
+  //  РАЗДЕЛЫ УСЛУГ
+  //  Берутся из поля "category" у услуг в salons/<id>.json.
+  //  Если ни у одной услуги поля нет — бот показывает один общий список, как раньше.
+  // ------------------------------------------------------------
+  function categories() {
+    const out = [];
+    db.services.forEach(s => { if (s.category && !out.includes(s.category)) out.push(s.category); });
+    return out;
+  }
+
+  // ссылка «Связаться с мастером» — поле salon.telegram в salons/<id>.json (без @)
+  function masterLink() {
+    const tg = String(db.salon.telegram || '').trim().replace(/^@/, '').replace(/^https?:\/\/t\.me\//, '');
+    return tg ? `https://t.me/${tg}` : '';
+  }
+
   const BTN = {
     book: '📅 Записаться',
     mine: '🗓 Мои записи',
@@ -353,48 +370,121 @@ module.exports = function createSalon(cfg) {
   }
 
   function viewContacts() {
-    let text = `<b>${esc(db.salon.name)}</b>\n${esc(db.salon.city)}\n\n`;
-    text += `Часы работы: ${db.salon.hours.start}–${db.salon.hours.end}\n\n`;
-    text += `<b>Услуги</b>\n`;
-    db.services.forEach(s => { text += `${esc(s.name)} — ${money(s.price)} сум\n`; });
-    return { text, kb: new InlineKeyboard() };
+    const s = db.salon;
+    let text = `<b>${esc(s.name)}</b>\n`;
+    text += s.address ? `📍 ${esc(s.address)}, ${esc(s.city)}\n` : `${esc(s.city)}\n`;
+    if (s.phone) text += `📞 ${esc(s.phone)}\n`;
+    text += `🕘 Часы работы: ${s.hours.start}–${s.hours.end}\n\n`;
+
+    const line = x => `${esc(x.name)} — ${money(x.price)} сум\n`;
+    const cats = categories();
+    if (cats.length) {
+      cats.forEach(c => {
+        text += `<b>${esc(c)}</b>\n`;
+        db.services.filter(x => x.category === c).forEach(x => { text += line(x); });
+        text += `\n`;
+      });
+      const rest = db.services.filter(x => !x.category);
+      if (rest.length) { text += `<b>Другое</b>\n`; rest.forEach(x => { text += line(x); }); }
+    } else {
+      text += `<b>Услуги</b>\n`;
+      db.services.forEach(x => { text += line(x); });
+    }
+
+    const link = masterLink();
+    const kb = link ? new InlineKeyboard().url('✉️ Связаться с мастером', link) : null;
+    return { text, kb };
   }
 
   // ============================================================
   //  ЗАПИСЬ ВНУТРИ БОТА (пошагово, кнопками)
   // ============================================================
-  const draft = new Map();   // chatId -> { service, master, date, time, name, phone, step }
+  const draft = new Map();   // chatId -> { services, cat, master, date, time, name, phone, step }
 
-  // --- экран выбора услуг: можно отметить несколько ---
+  // --- экран выбора услуг: сначала раздел (если они есть), потом услуги; можно отметить несколько ---
   function svcKeyboard(d) {
     const kb = new InlineKeyboard();
-    db.services.forEach(s => {
-      const on = d.services.includes(s.id);
-      kb.text(`${on ? '✅' : '▫️'} ${s.name} · ${money(s.price)}`, `bk_s_${s.id}`).row();
-    });
+    const cats = categories();
+    const inCat = cats.length && d.cat != null && cats[d.cat] !== undefined;
+
+    if (cats.length && !inCat) {
+      // список разделов
+      cats.forEach((c, i) => {
+        const n = db.services.filter(s => s.category === c && d.services.includes(s.id)).length;
+        kb.text(n ? `${c} · ✅ ${n}` : c, `bk_c_${i}`).row();
+      });
+      const rest = db.services.filter(s => !s.category);
+      rest.forEach(s => {
+        const on = d.services.includes(s.id);
+        kb.text(`${on ? '✅' : '▫️'} ${s.name} · ${money(s.price)}`, `bk_s_${s.id}`).row();
+      });
+    } else {
+      // услуги одного раздела (или все, если разделов нет)
+      const list = inCat ? db.services.filter(s => s.category === cats[d.cat]) : db.services;
+      list.forEach(s => {
+        const on = d.services.includes(s.id);
+        kb.text(`${on ? '✅' : '▫️'} ${s.name} · ${money(s.price)}`, `bk_s_${s.id}`).row();
+      });
+      if (inCat) kb.text('← Все разделы', 'bk_cats').row();
+    }
     if (d.services.length) kb.text(`Далее → ${money(servicePrice(d.services))} сум`, 'bk_go');
     return kb;
   }
 
   function svcText(d) {
-    if (!d.services.length) return 'Что вас интересует?\nМожно отметить сразу несколько.';
+    const cats = categories();
+    const inCat = cats.length && d.cat != null && cats[d.cat] !== undefined;
+    let head;
+    if (!cats.length) head = 'Что вас интересует?\nМожно отметить сразу несколько.';
+    else if (!inCat) head = 'Выберите раздел.\nМожно отметить услуги из разных разделов.';
+    else head = `${cats[d.cat]}\nОтметьте услуги — можно несколько.`;
+
+    if (!d.services.length) return head;
     const mins = T.totalDuration(db, d.services);
-    return `Что вас интересует?\nМожно отметить сразу несколько.\n\n` +
+    return `${head}\n\n` +
            `Выбрано: ${serviceName(d.services)}\n` +
            `Займёт ${mins} мин · ${money(servicePrice(d.services))} сум`;
   }
 
   function startBooking(ctx) {
-    const d = { step: 'service', services: [] };
+    const d = { step: 'service', services: [], cat: null };
     draft.set(ctx.chat.id, d);
     return ctx.reply(svcText(d), { reply_markup: svcKeyboard(d) });
   }
+
+  // открыть раздел
+  bot.callbackQuery(/^bk_c_(\d+)$/, async ctx => {
+    const d = draft.get(ctx.chat.id) || { services: [] };
+    d.services = d.services || [];
+    d.cat = Number(ctx.match[1]);
+    d.step = 'service';
+    draft.set(ctx.chat.id, d);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
+  });
+
+  // вернуться к списку разделов
+  bot.callbackQuery('bk_cats', async ctx => {
+    const d = draft.get(ctx.chat.id) || { services: [] };
+    d.services = d.services || [];
+    d.cat = null;
+    d.step = 'service';
+    draft.set(ctx.chat.id, d);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
+  });
 
   // нажатие на услугу — включить или выключить
   bot.callbackQuery(/^bk_s_(.+)$/, async ctx => {
     const d = draft.get(ctx.chat.id) || { services: [] };
     d.services = d.services || [];
     const id = ctx.match[1];
+    // если черновик потерялся — остаёмся в разделе этой услуги
+    if (d.cat == null) {
+      const s = db.services.find(x => x.id === id);
+      const i = s && s.category ? categories().indexOf(s.category) : -1;
+      if (i >= 0) d.cat = i;
+    }
     d.services = d.services.includes(id)
       ? d.services.filter(x => x !== id)
       : [...d.services, id];
@@ -431,6 +521,9 @@ module.exports = function createSalon(cfg) {
   bot.callbackQuery('bk_back_service', async ctx => {
     const d = draft.get(ctx.chat.id) || { services: [] };
     d.services = d.services || [];
+    d.cat = null;                    // назад — к списку разделов
+    d.step = 'service';
+    draft.set(ctx.chat.id, d);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
   });
@@ -764,7 +857,9 @@ module.exports = function createSalon(cfg) {
     }
     if (txt === BTN.contacts) {
       const v = viewContacts();
-      return ctx.reply(v.text, { parse_mode: 'HTML' });
+      const opt = { parse_mode: 'HTML' };
+      if (v.kb) opt.reply_markup = v.kb;           // кнопка «Связаться с мастером», если задан telegram
+      return ctx.reply(v.text, opt);
     }
 
     // --- кнопки админа ---
