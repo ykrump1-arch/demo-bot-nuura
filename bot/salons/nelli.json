@@ -8,7 +8,7 @@
     },
     "stepMin": 30,
     "horizonDays": 14,
-    "address": "Чиланзар 8, дом 16 · PODO NAIL",
+    "address": "Чиланзар 8, д. 16, студия PODO NAIL",
     "phone": "+998 90 325 08 05",
     "tagline": "маникюр · педикюр · подология",
     "taglineUz": "manikyur · pedikyur · podologiya",
@@ -296,6 +296,7 @@
         "pod_relief"
       ],
       "workdays": [
+        0,
         1,
         2,
         3,
