@@ -1,1170 +1,344 @@
-// ============================================================
-//  ОДИН САЛОН = ОДИН БОТ
-//  Эта функция создаёт бота и всю его логику для одного салона.
-//  Вызывается столько раз, сколько салонов в списке.
-// ============================================================
-const { Bot, InlineKeyboard, Keyboard, InputFile } = require('grammy');
-const store = require('./data');
-const T = require('./slots');
-
-module.exports = function createSalon(cfg) {
-  // cfg = { id, token, admins: [], username }
-  const { db, save } = store.load(cfg.id);
-
-  const bot = new Bot(cfg.token);
-  const ADMIN_IDS = cfg.admins || [];
-  const BOT_USERNAME = cfg.username || '';
-
-  const isAdmin = id => ADMIN_IDS.includes(String(id));
-  const money = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  const log = (...a) => console.log(`[${cfg.id}]`, ...a);
-
-  function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  function serviceName(id) {
-    const ids = T.svcIds(id);
-    if (!ids.length) return '—';
-    return ids.map(i => {
-      const s = db.services.find(x => x.id === i);
-      return s ? s.name : i;
-    }).join(' + ');
-  }
-  function servicePrice(id) {
-    return T.svcIds(id).reduce((sum, i) => {
-      const s = db.services.find(x => x.id === i);
-      return sum + (s ? s.price : 0);
-    }, 0);
-  }
-  function masterName(id) {
-    const m = db.masters.find(x => x.id === id);
-    return m ? m.name : id;
-  }
-
-  // ------------------------------------------------------------
-  //  РАЗДЕЛЫ УСЛУГ
-  //  Берутся из поля "category" у услуг в salons/<id>.json.
-  //  Если ни у одной услуги поля нет — бот показывает один общий список, как раньше.
-  // ------------------------------------------------------------
-  function categories() {
-    const out = [];
-    db.services.forEach(s => { if (s.category && !out.includes(s.category)) out.push(s.category); });
-    return out;
-  }
-
-  // ссылка «Связаться с мастером» — поле salon.telegram в salons/<id>.json (без @)
-  function masterLink() {
-    const tg = String(db.salon.telegram || '').trim().replace(/^@/, '').replace(/^https?:\/\/t\.me\//, '');
-    return tg ? `https://t.me/${tg}` : '';
-  }
-
-  const BTN = {
-    book: '📅 Записаться',
-    mine: '🗓 Мои записи',
-    contacts: '📍 Контакты',
-    sched: '📅 Расписание',
-    books: '📋 Записи',
-    clients: '👥 Клиенты',
-    stats: '📊 Статистика',
-    export: '⬇️ Выгрузка',
-    settings: '⚙️ Настройки',
-    bcast: '📣 Рассылка',
-  };
-
-  function clientKb() {
-    return new Keyboard()
-      .text(BTN.book).row()
-      .text(BTN.mine).text(BTN.contacts)
-      .resized().persistent();
-  }
-  function adminKb() {
-    return new Keyboard()
-      .text(BTN.sched).text(BTN.books).row()
-      .text(BTN.clients).text(BTN.stats).row()
-      .text(BTN.export).text(BTN.settings).row()
-      .text(BTN.bcast)
-      .resized().persistent();
-  }
-  const kbFor = id => (isAdmin(id) ? adminKb() : clientKb());
-
-  // ============================================================
-  //  СОЗДАНИЕ ЗАПИСИ (общее для сайта и бота)
-  // ============================================================
-  function createBooking({ service, master, date, time, name, phone, source, chatId, group, part, parts }) {
-    const ids = T.svcIds(service);
-    const booking = {
-      id: 'B' + (db.seq++),
-      group: group || null,
-      part: part || 1,
-      parts: parts || 1,
-      service: ids.join(','),      // строка — для старых мест в коде
-      services: ids,               // массив — основное
-      duration: T.totalDuration(db, ids),
-      price: servicePrice(ids),
-      master, date, time,
-      name: String(name).slice(0, 60),
-      phone: String(phone).slice(0, 30),
-      status: 'active',
-      chatId: chatId || null,
-      remindedAt: null,
-      source: source || 'bot',
-      createdAt: new Date().toISOString(),
-    };
-    db.bookings.push(booking);
-    save();
-
-    notifyAdmins(
-      `🔔 <b>Новая запись</b>` +
-      (booking.parts > 1 ? ` · часть ${booking.part} из ${booking.parts}` : '') + `\n\n` +
-      `Гость: <b>${esc(booking.name)}</b>\n` +
-      `Телефон: ${esc(booking.phone)}\n` +
-      `Услуга: ${esc(serviceName(ids))}\n` +
-      `Мастер: ${esc(masterName(master))}\n` +
-      `Когда: <b>${T.prettyDate(date)}, ${time}</b> · ${booking.duration} мин\n` +
-      `Сумма: ${money(booking.price)} сум\n` +
-      `Источник: ${esc(booking.source)}`
-    );
-    return booking;
-  }
-
-  async function notifyAdmins(text) {
-    for (const id of ADMIN_IDS) {
-      try { await bot.api.sendMessage(id, text, { parse_mode: 'HTML' }); }
-      catch (e) { console.error('Не отправилось админу', id, e.message); }
+{
+  "salon": {
+    "name": "Nelli Nails",
+    "city": "Ташкент",
+    "hours": {
+      "start": "10:00",
+      "end": "19:00"
+    },
+    "stepMin": 30,
+    "horizonDays": 14,
+    "address": "Чиланзар 8, д. 16, студия PODO NAIL",
+    "phone": "+998 90 325 08 05",
+    "telegram": "nailyaramilevna80",
+    "tagline": "маникюр · педикюр · подология",
+    "taglineUz": "manikyur · pedikyur · podologiya",
+    "rebookDays": 21,
+    "rebookHour": 12
+  },
+  "services": [
+    {
+      "id": "man_hyg",
+      "name": "Маникюр гигиена",
+      "nameUz": "Gigiyenik manikyur",
+      "duration": 60,
+      "price": 200000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_cover",
+      "name": "Маникюр с покрытием (короткие)",
+      "nameUz": "Qoplamali manikyur (kalta)",
+      "duration": 120,
+      "price": 300000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_ext",
+      "name": "Наращивание (от)",
+      "nameUz": "Tirnoq uzaytirish (dan)",
+      "duration": 180,
+      "price": 400000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_corr",
+      "name": "Коррекция",
+      "nameUz": "Korreksiya",
+      "duration": 150,
+      "price": 350000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_jp",
+      "name": "Японский маникюр",
+      "nameUz": "Yapon manikyuri",
+      "duration": 60,
+      "price": 250000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_male",
+      "name": "Мужской маникюр",
+      "nameUz": "Erkaklar manikyuri",
+      "duration": 60,
+      "price": 250000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_cut",
+      "name": "Стрижка ногтей (руки)",
+      "nameUz": "Tirnoq olish (qo‘l)",
+      "duration": 30,
+      "price": 100000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "man_remove",
+      "name": "Снятие покрытия",
+      "nameUz": "Qoplamani olib tashlash",
+      "duration": 30,
+      "price": 50000,
+      "category": "💅 Маникюр"
+    },
+    {
+      "id": "des_french",
+      "name": "Дизайн: френч, втирка",
+      "nameUz": "Dizayn: french, surtma",
+      "duration": 15,
+      "price": 50000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "des_ombre",
+      "name": "Дизайн: омбре, градиент",
+      "nameUz": "Dizayn: ombre, gradiyent",
+      "duration": 20,
+      "price": 70000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "des_paint",
+      "name": "Рисунок от руки (1 палец)",
+      "nameUz": "Qo‘lda rasm (1 barmoq)",
+      "duration": 15,
+      "price": 10000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "des_stamp",
+      "name": "Стемпинг, слайдеры (1–2 п.)",
+      "nameUz": "Stemping, slayder (1–2 b.)",
+      "duration": 10,
+      "price": 5000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "des_lift",
+      "name": "Поднятие клюющих ногтей (1 п.)",
+      "nameUz": "Egilgan tirnoqni ko‘tarish (1 b.)",
+      "duration": 10,
+      "price": 10000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "des_repair",
+      "name": "Ремонт ногтя",
+      "nameUz": "Tirnoq ta’miri",
+      "duration": 10,
+      "price": 10000,
+      "category": "🎨 Дизайн"
+    },
+    {
+      "id": "ped_hyg",
+      "name": "Педикюр гигиена",
+      "nameUz": "Gigiyenik pedikyur",
+      "duration": 90,
+      "price": 300000,
+      "category": "🦶 Педикюр"
+    },
+    {
+      "id": "ped_cover",
+      "name": "Педикюр с покрытием",
+      "nameUz": "Qoplamali pedikyur",
+      "duration": 120,
+      "price": 350000,
+      "category": "🦶 Педикюр"
+    },
+    {
+      "id": "ped_male",
+      "name": "Педикюр мужской",
+      "nameUz": "Erkaklar pedikyuri",
+      "duration": 90,
+      "price": 400000,
+      "category": "🦶 Педикюр"
+    },
+    {
+      "id": "ped_toes",
+      "name": "Обработка пальчиков гигиена",
+      "nameUz": "Barmoqlarni gigiyenik ishlov",
+      "duration": 60,
+      "price": 250000,
+      "category": "🦶 Педикюр"
+    },
+    {
+      "id": "pod_med1",
+      "name": "Педикюр медицинский (первый)",
+      "nameUz": "Tibbiy pedikyur (birinchi)",
+      "duration": 120,
+      "price": 450000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_med2",
+      "name": "Педикюр медицинский (последующий)",
+      "nameUz": "Tibbiy pedikyur (keyingi)",
+      "duration": 90,
+      "price": 400000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_hard",
+      "name": "Сложный педикюр (микоз и т.д.)",
+      "nameUz": "Murakkab pedikyur (mikoz va b.)",
+      "duration": 120,
+      "price": 500000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_ti",
+      "name": "Установка титановой нити (б/п)",
+      "nameUz": "Titan ip o‘rnatish (bosh b.)",
+      "duration": 60,
+      "price": 300000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_ti_cor",
+      "name": "Коррекция титановой нити (б/п)",
+      "nameUz": "Titan ip korreksiyasi (bosh b.)",
+      "duration": 30,
+      "price": 250000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_ti_234",
+      "name": "Установка ТН (2, 3, 4 палец)",
+      "nameUz": "Titan ip (2, 3, 4 barmoq)",
+      "duration": 30,
+      "price": 150000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_corn",
+      "name": "Удаление стержневой мозоли",
+      "nameUz": "Sterjenli qadoqni olib tashlash",
+      "duration": 30,
+      "price": 100000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_wart",
+      "name": "Удаление бородавок (за ед.)",
+      "nameUz": "So‘gal olib tashlash (dona)",
+      "duration": 30,
+      "price": 100000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_lysis",
+      "name": "Зачистка онихолизиса (б/п)",
+      "nameUz": "Onixolizis tozalash (bosh b.)",
+      "duration": 30,
+      "price": 100000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_mycos",
+      "name": "Зачистка онихомикоза (б/п)",
+      "nameUz": "Onixomikoz tozalash (bosh b.)",
+      "duration": 30,
+      "price": 150000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_gryph",
+      "name": "Зачистка онихогрифоза (б/п)",
+      "nameUz": "Onixogrifoz tozalash (bosh b.)",
+      "duration": 30,
+      "price": 150000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_heels",
+      "name": "Обработка пяток (сложно)",
+      "nameUz": "Tovonga ishlov (murakkab)",
+      "duration": 60,
+      "price": 250000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_ingrow",
+      "name": "Иссечение вросшего ногтя",
+      "nameUz": "O‘sib kirgan tirnoqni kesish",
+      "duration": 30,
+      "price": 100000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_cut",
+      "name": "Стрижка ногтей (ноги)",
+      "nameUz": "Tirnoq olish (oyoq)",
+      "duration": 30,
+      "price": 100000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_test",
+      "name": "Забор на анализ",
+      "nameUz": "Tahlil uchun namuna olish",
+      "duration": 30,
+      "price": 50000,
+      "category": "🩺 Подология"
+    },
+    {
+      "id": "pod_relief",
+      "name": "Разгрузка",
+      "nameUz": "Yengillatish",
+      "duration": 15,
+      "price": 10000,
+      "category": "🩺 Подология"
     }
-  }
-
-  // ============================================================
-  //  ЭКРАНЫ АДМИНКИ (общие для кнопок внизу и инлайна)
-  // ============================================================
-  function viewBooks() {
-    const today = T.nowTashkent().date;
-    const list = db.bookings
-      .filter(b => b.status === 'active' && b.date >= today)
-      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
-      .slice(0, 15);
-
-    if (!list.length) return { text: 'Пока записей нет.', kb: new InlineKeyboard() };
-
-    let text = '<b>Ближайшие записи</b>\n\n';
-    const kb = new InlineKeyboard();
-    for (const b of list) {
-      text += `${T.shortDate(b.date)} ${b.time} · <b>${esc(b.name)}</b>\n` +
-              `<i>${esc(masterName(b.master))} · ${esc(serviceName(b.service))} · ${esc(b.phone)}</i>\n\n`;
-      kb.text(`✖ ${T.shortDate(b.date)} ${b.time} ${b.name}`.slice(0, 38), `a_cancel_${b.id}`).row();
+  ],
+  "masters": [
+    {
+      "id": "nailya",
+      "name": "Наиля",
+      "services": [
+        "man_hyg",
+        "man_cover",
+        "man_ext",
+        "man_corr",
+        "man_jp",
+        "man_male",
+        "man_cut",
+        "man_remove",
+        "des_french",
+        "des_ombre",
+        "des_paint",
+        "des_stamp",
+        "des_lift",
+        "des_repair",
+        "ped_hyg",
+        "ped_cover",
+        "ped_male",
+        "ped_toes",
+        "pod_med1",
+        "pod_med2",
+        "pod_hard",
+        "pod_ti",
+        "pod_ti_cor",
+        "pod_ti_234",
+        "pod_corn",
+        "pod_wart",
+        "pod_lysis",
+        "pod_mycos",
+        "pod_gryph",
+        "pod_heels",
+        "pod_ingrow",
+        "pod_cut",
+        "pod_test",
+        "pod_relief"
+      ],
+      "workdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
     }
-    return { text, kb };
-  }
-
-  function viewMasters() {
-    const kb = new InlineKeyboard();
-    db.masters.forEach(m => kb.text(m.name, `a_sm_${m.id}`).row());
-    return { text: 'Выберите мастера:', kb };
-  }
-
-  // ============================================================
-  //  КАРТОЧКА КЛИЕНТА
-  //  Клиенты собираются из записей, ключ — телефон (только цифры).
-  //  Заметка живёт в db.clients[телефон].note
-  // ============================================================
-  const digits = v => String(v || '').replace(/\D/g, '');
-  const PER_PAGE = 8;
-
-  function clientsIndex() {
-    const map = new Map();
-    db.bookings.forEach(b => {
-      const key = digits(b.phone);
-      if (!key) return;
-      if (!map.has(key)) {
-        map.set(key, { key, name: b.name, phone: b.phone, count: 0, cancelled: 0, sum: 0,
-                       first: b.date, last: b.date, visits: [] });
-      }
-      const c = map.get(key);
-      c.visits.push(b);
-      if (b.status === 'active') { c.count++; c.sum += b.price || 0; } else c.cancelled++;
-      if (b.date > c.last) { c.last = b.date; c.name = b.name || c.name; }
-      if (b.date < c.first) c.first = b.date;
-    });
-    return map;
-  }
-
-  function clientsSorted() {
-    return [...clientsIndex().values()].sort((a, b) => b.last.localeCompare(a.last));
-  }
-
-  // список клиентов страницами
-  function viewClients(page = 0, found = null) {
-    const all = found || clientsSorted();
-    const pages = Math.max(1, Math.ceil(all.length / PER_PAGE));
-    const p = Math.min(Math.max(0, page), pages - 1);
-    const slice = all.slice(p * PER_PAGE, p * PER_PAGE + PER_PAGE);
-
-    let text = found
-      ? `<b>Нашёл: ${all.length}</b>\n\n`
-      : `<b>Клиенты · ${all.length}</b>\n\n`;
-    if (!slice.length) text += 'Пока пусто.';
-    else text += '<i>Нажмите на клиента, чтобы открыть карточку.</i>';
-
-    const kb = new InlineKeyboard();
-    slice.forEach(c => {
-      const note = (db.clients[c.key] && db.clients[c.key].note) ? ' 📝' : '';
-      kb.text(`${c.name || 'Без имени'} · ${c.count}${note}`, `ac_c_${c.key}`).row();
-    });
-    if (!found && pages > 1) {
-      if (p > 0) kb.text('‹ Назад', `ac_l_${p - 1}`);
-      kb.text(`${p + 1}/${pages}`, 'ac_noop');
-      if (p < pages - 1) kb.text('Вперёд ›', `ac_l_${p + 1}`);
-      kb.row();
-    }
-    kb.text('🔎 Найти клиента', 'ac_find');
-    return { text, kb };
-  }
-
-  // карточка одного
-  function viewClient(key) {
-    const c = clientsIndex().get(key);
-    if (!c) return { text: 'Клиент не найден.', kb: new InlineKeyboard().text('‹ К списку', 'ac_l_0') };
-
-    const today = T.nowTashkent().date;
-    const next = c.visits
-      .filter(b => b.status === 'active' && b.date >= today)
-      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
-
-    let text = `👤 <b>${esc(c.name || 'Без имени')}</b>\n${esc(c.phone)}\n\n`;
-    text += `Визитов: <b>${c.count}</b> · на ${money(c.sum)} сум\n`;
-    if (c.count > 1) text += `Средний чек: ${money(Math.round(c.sum / c.count))} сум\n`;
-    const past0 = c.visits.filter(b => b.date <= today).map(b => b.date).sort();
-    text += past0.length
-      ? `Первый визит: ${T.shortDate(past0[0])} · последний: ${T.shortDate(past0[past0.length - 1])}\n`
-      : `Ещё не приходил(а)\n`;
-    if (c.cancelled) text += `Отмен: ${c.cancelled}\n`;
-    if (next) text += `\n📅 Записан: <b>${T.prettyDate(next.date)}, ${next.time}</b>\n`;
-
-    const note = db.clients[key] && db.clients[key].note;
-    if (note) text += `\n📝 <b>Заметка</b>\n${esc(note)}\n`;
-
-    const past = c.visits
-      .filter(b => b.date <= today)
-      .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
-      .slice(0, 8);
-    if (past.length) {
-      text += `\n<b>История</b>\n`;
-      past.forEach(b => {
-        const mark = b.status === 'active' ? '' : ' <i>(отменён)</i>';
-        text += `${T.shortDate(b.date)} · ${esc(serviceName(b.service))} · ${esc(masterName(b.master))} · ${money(b.price)}${mark}\n`;
-      });
-    }
-
-    const kb = new InlineKeyboard()
-      .text(note ? '📝 Изменить заметку' : '📝 Добавить заметку', `ac_n_${key}`).row()
-      .text('‹ К списку', 'ac_l_0');
-    return { text, kb };
-  }
-
-  bot.callbackQuery(/^ac_l_(\d+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    const v = viewClients(Number(ctx.match[1]));
-    try { await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-    catch (e) { await ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-  });
-
-  bot.callbackQuery(/^ac_c_(\d+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    const v = viewClient(ctx.match[1]);
-    try { await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-    catch (e) { await ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-  });
-
-  bot.callbackQuery(/^ac_n_(\d+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    const key = ctx.match[1];
-    adminIn.set(ctx.chat.id, { kind: 'note', key });
-    const cur = db.clients[key] && db.clients[key].note;
-    await ctx.reply(
-      `Напишите заметку об этом клиенте.\n` +
-      (cur ? `\nСейчас записано:\n<i>${esc(cur)}</i>\n` : '') +
-      `\nЧтобы стереть — отправьте минус: <code>-</code>`,
-      { parse_mode: 'HTML' }
-    );
-  });
-
-  bot.callbackQuery('ac_noop', ctx => ctx.answerCallbackQuery());
-
-  bot.callbackQuery('ac_find', async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    adminIn.set(ctx.chat.id, { kind: 'search' });
-    await ctx.reply('Напишите имя или часть номера телефона.');
-  });
-
-  function viewStats() {
-    const all = db.bookings;
-    const cnt = s => all.filter(b => b.status === s).length;
-
-    let text = `<b>Статистика</b>\n\n`;
-    text += `Всего записей: <b>${all.length}</b>\n`;
-    text += `Активных: ${cnt('active')}\nОтмен: ${cnt('cancelled')}\nНеявок: ${cnt('noshow')}\n\n`;
-
-    text += `<b>По мастерам</b>\n`;
-    db.masters.forEach(m => {
-      text += `${esc(m.name)}: ${all.filter(b => b.master === m.id).length}\n`;
-    });
-
-    text += `\n<b>Откуда пришли</b>\n`;
-    const src = {};
-    all.forEach(b => { src[b.source || 'site'] = (src[b.source || 'site'] || 0) + 1; });
-    Object.entries(src).forEach(([k, v]) => { text += `${esc(k)}: ${v}\n`; });
-
-    text += `\nПодключили напоминание: ${all.filter(b => b.chatId).length} из ${all.length}`;
-    return { text, kb: new InlineKeyboard() };
-  }
-
-  function viewSettings() {
-    let text = `<b>Настройки</b>\n\n`;
-    text += `Часы работы: ${db.salon.hours.start}–${db.salon.hours.end}\n`;
-    text += `Шаг записи: ${db.salon.stepMin} мин\nГоризонт: ${db.salon.horizonDays} дней\n`;
-    text += db.salon.rebookDays
-      ? `Напоминание о повторе: через ${db.salon.rebookDays} дн.\n\n`
-      : `Напоминание о повторе: выключено\n\n`;
-    text += `<b>Услуги</b>\n`;
-    db.services.forEach(s => { text += `${esc(s.name)} — ${s.duration} мин, ${money(s.price)} сум\n`; });
-    text += `\n<b>Мастера</b>\n`;
-    db.masters.forEach(m => { text += `${esc(m.name)} — ${m.services.map(serviceName).join(', ')}\n`; });
-    text += `\n<i>Чтобы изменить — напишите разработчику.</i>`;
-    return { text, kb: new InlineKeyboard() };
-  }
-
-  async function exportCsv(ctx) {
-    const head = 'Дата;Время;Имя;Телефон;Услуга;Мастер;Статус;Источник\n';
-    const rows = db.bookings.map(b =>
-      [b.date, b.time, b.name, b.phone, serviceName(b.service),
-       masterName(b.master), b.status, b.source || 'site'].join(';')
-    ).join('\n');
-    const buf = Buffer.from('﻿' + head + rows, 'utf8');
-    await ctx.replyWithDocument(new InputFile(buf, `nuura-zapisi-${T.nowTashkent().date}.csv`));
-  }
-
-  // ============================================================
-  //  ЭКРАНЫ КЛИЕНТА
-  // ============================================================
-  function viewMine(chatId) {
-    const today = T.nowTashkent().date;
-    const list = db.bookings
-      .filter(b => b.chatId === chatId && b.status === 'active' && b.date >= today)
-      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-
-    if (!list.length) {
-      return { text: 'У вас пока нет активных записей.', kb: new InlineKeyboard() };
-    }
-    let text = '<b>Ваши записи</b>\n\n';
-    const kb = new InlineKeyboard();
-    list.forEach(b => {
-      text += `${T.prettyDate(b.date)}, <b>${b.time}</b>\n` +
-              `${esc(serviceName(b.service))} · ${esc(masterName(b.master))}\n\n`;
-      kb.text(`Отменить ${T.shortDate(b.date)} ${b.time}`, `cl_no_${b.id}`).row();
-    });
-    return { text, kb };
-  }
-
-  function viewContacts() {
-    const s = db.salon;
-    let text = `<b>${esc(s.name)}</b>\n`;
-    text += s.address ? `📍 ${esc(s.address)}, ${esc(s.city)}\n` : `${esc(s.city)}\n`;
-    if (s.phone) text += `📞 ${esc(s.phone)}\n`;
-    text += `🕘 Часы работы: ${s.hours.start}–${s.hours.end}\n\n`;
-
-    const line = x => `${esc(x.name)} — ${money(x.price)} сум\n`;
-    const cats = categories();
-    if (cats.length) {
-      cats.forEach(c => {
-        text += `<b>${esc(c)}</b>\n`;
-        db.services.filter(x => x.category === c).forEach(x => { text += line(x); });
-        text += `\n`;
-      });
-      const rest = db.services.filter(x => !x.category);
-      if (rest.length) { text += `<b>Другое</b>\n`; rest.forEach(x => { text += line(x); }); }
-    } else {
-      text += `<b>Услуги</b>\n`;
-      db.services.forEach(x => { text += line(x); });
-    }
-
-    const link = masterLink();
-    const kb = link ? new InlineKeyboard().url('✉️ Связаться с мастером', link) : null;
-    return { text, kb };
-  }
-
-  // ============================================================
-  //  ЗАПИСЬ ВНУТРИ БОТА (пошагово, кнопками)
-  // ============================================================
-  const draft = new Map();   // chatId -> { services, cat, master, date, time, name, phone, step }
-
-  // --- экран выбора услуг: сначала раздел (если они есть), потом услуги; можно отметить несколько ---
-  function svcKeyboard(d) {
-    const kb = new InlineKeyboard();
-    const cats = categories();
-    const inCat = cats.length && d.cat != null && cats[d.cat] !== undefined;
-
-    if (cats.length && !inCat) {
-      // список разделов
-      cats.forEach((c, i) => {
-        const n = db.services.filter(s => s.category === c && d.services.includes(s.id)).length;
-        kb.text(n ? `${c} · ✅ ${n}` : c, `bk_c_${i}`).row();
-      });
-      const rest = db.services.filter(s => !s.category);
-      rest.forEach(s => {
-        const on = d.services.includes(s.id);
-        kb.text(`${on ? '✅' : '▫️'} ${s.name} · ${money(s.price)}`, `bk_s_${s.id}`).row();
-      });
-    } else {
-      // услуги одного раздела (или все, если разделов нет)
-      const list = inCat ? db.services.filter(s => s.category === cats[d.cat]) : db.services;
-      list.forEach(s => {
-        const on = d.services.includes(s.id);
-        kb.text(`${on ? '✅' : '▫️'} ${s.name} · ${money(s.price)}`, `bk_s_${s.id}`).row();
-      });
-      if (inCat) kb.text('← Все разделы', 'bk_cats').row();
-    }
-    if (d.services.length) kb.text(`Далее → ${money(servicePrice(d.services))} сум`, 'bk_go');
-    return kb;
-  }
-
-  function svcText(d) {
-    const cats = categories();
-    const inCat = cats.length && d.cat != null && cats[d.cat] !== undefined;
-    let head;
-    if (!cats.length) head = 'Что вас интересует?\nМожно отметить сразу несколько.';
-    else if (!inCat) head = 'Выберите раздел.\nМожно отметить услуги из разных разделов.';
-    else head = `${cats[d.cat]}\nОтметьте услуги — можно несколько.`;
-
-    if (!d.services.length) return head;
-    const mins = T.totalDuration(db, d.services);
-    return `${head}\n\n` +
-           `Выбрано: ${serviceName(d.services)}\n` +
-           `Займёт ${mins} мин · ${money(servicePrice(d.services))} сум`;
-  }
-
-  function startBooking(ctx) {
-    const d = { step: 'service', services: [], cat: null };
-    draft.set(ctx.chat.id, d);
-    return ctx.reply(svcText(d), { reply_markup: svcKeyboard(d) });
-  }
-
-  // открыть раздел
-  bot.callbackQuery(/^bk_c_(\d+)$/, async ctx => {
-    const d = draft.get(ctx.chat.id) || { services: [] };
-    d.services = d.services || [];
-    d.cat = Number(ctx.match[1]);
-    d.step = 'service';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
-  });
-
-  // вернуться к списку разделов
-  bot.callbackQuery('bk_cats', async ctx => {
-    const d = draft.get(ctx.chat.id) || { services: [] };
-    d.services = d.services || [];
-    d.cat = null;
-    d.step = 'service';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
-  });
-
-  // нажатие на услугу — включить или выключить
-  bot.callbackQuery(/^bk_s_(.+)$/, async ctx => {
-    const d = draft.get(ctx.chat.id) || { services: [] };
-    d.services = d.services || [];
-    const id = ctx.match[1];
-    // если черновик потерялся — остаёмся в разделе этой услуги
-    if (d.cat == null) {
-      const s = db.services.find(x => x.id === id);
-      const i = s && s.category ? categories().indexOf(s.category) : -1;
-      if (i >= 0) d.cat = i;
-    }
-    d.services = d.services.includes(id)
-      ? d.services.filter(x => x !== id)
-      : [...d.services, id];
-    d.step = 'service';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
-  });
-
-  // «Далее» — выбор мастера
-  bot.callbackQuery('bk_go', async ctx => {
-    const d = draft.get(ctx.chat.id);
-    if (!d || !d.services || !d.services.length) {
-      return ctx.answerCallbackQuery('Сначала выберите услугу');
-    }
-    d.step = 'master';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-
-    const list = db.masters.filter(m => d.services.every(id => m.services.includes(id)));
-    const kb = new InlineKeyboard();
-    list.forEach(m => kb.text(m.name, `bk_m_${m.id}`).row());
-    kb.text('← Назад', 'bk_back_service');
-
-    const head = `${serviceName(d.services)}\n${T.totalDuration(db, d.services)} мин · ${money(servicePrice(d.services))} сум\n\n`;
-    await ctx.editMessageText(
-      list.length
-        ? head + 'Выберите мастера:'
-        : head + 'Такое сочетание услуг не делает ни один мастер. Вернитесь назад и уберите что-то.',
-      { reply_markup: kb }
-    );
-  });
-
-  bot.callbackQuery('bk_back_service', async ctx => {
-    const d = draft.get(ctx.chat.id) || { services: [] };
-    d.services = d.services || [];
-    d.cat = null;                    // назад — к списку разделов
-    d.step = 'service';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(svcText(d), { reply_markup: svcKeyboard(d) });
-  });
-
-  bot.callbackQuery(/^bk_m_(.+)$/, async ctx => {
-    const d = draft.get(ctx.chat.id) || {};
-    d.master = ctx.match[1]; d.step = 'date';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await showDates(ctx, d);
-  });
-
-  async function showDates(ctx, d) {
-    const kb = new InlineKeyboard();
-    let shown = 0;
-    for (const date of T.dateRange(db.salon.horizonDays)) {
-      const free = T.freeSlots(db, d.master, date, d.services).length;
-      if (!free) continue;
-      kb.text(`${T.shortDate(date)} · ${free}`, `bk_d_${date}`);
-      shown++;
-      if (shown % 2 === 0) kb.row();
-    }
-    kb.row().text('← Назад', "bk_go");
-    await ctx.editMessageText(
-      `${serviceName(d.services)} · ${masterName(d.master)}\n\nВыберите день (цифра — сколько свободных окон):`,
-      { reply_markup: kb }
-    );
-  }
-
-  bot.callbackQuery(/^bk_d_(.+)$/, async ctx => {
-    const d = draft.get(ctx.chat.id) || {};
-    d.date = ctx.match[1]; d.step = 'time';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-
-    const slots = T.freeSlots(db, d.master, d.date, d.services);
-    const kb = new InlineKeyboard();
-    slots.forEach((t, i) => {
-      kb.text(t, `bk_t_${t}`);
-      if (i % 4 === 3) kb.row();
-    });
-    kb.row().text('← Назад', `bk_m_${d.master}`);
-    await ctx.editMessageText(
-      `${masterName(d.master)} · ${T.prettyDate(d.date)}\n\nВыберите время:`,
-      { reply_markup: kb }
-    );
-  });
-
-  bot.callbackQuery(/^bk_t_(.+)$/, async ctx => {
-    const d = draft.get(ctx.chat.id) || {};
-    d.time = ctx.match[1]; d.step = 'name';
-    draft.set(ctx.chat.id, d);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
-      `${serviceName(d.services)}\n${masterName(d.master)} · ${T.prettyDate(d.date)}, ${d.time}\n\n` +
-      `Как вас зовут? Напишите имя сообщением.`
-    );
-  });
-
-  bot.callbackQuery(/^bk_confirm$/, async ctx => {
-    const d = draft.get(ctx.chat.id);
-    if (!d || !d.phone) return ctx.answerCallbackQuery('Что-то пошло не так, начните заново');
-
-    if (!T.freeSlots(db, d.master, d.date, d.services).includes(d.time)) {
-      draft.delete(ctx.chat.id);
-      await ctx.answerCallbackQuery();
-      return ctx.editMessageText('Это время только что заняли. Начните запись заново.');
-    }
-
-    const b = createBooking({
-      service: d.services, master: d.master, date: d.date, time: d.time,
-      name: d.name, phone: d.phone, source: 'bot', chatId: ctx.chat.id,
-    });
-    draft.delete(ctx.chat.id);
-    await ctx.answerCallbackQuery('Записали!');
-    await ctx.editMessageText(
-      `✅ <b>Записали вас</b>\n\n` +
-      `${esc(serviceName(b.service))}\nМастер: ${esc(masterName(b.master))}\n` +
-      `${T.prettyDate(b.date)}, <b>${b.time}</b>\n\n` +
-      `Напомню за два часа до визита.`,
-      { parse_mode: 'HTML' }
-    );
-  });
-
-  bot.callbackQuery('bk_cancel', async ctx => {
-    draft.delete(ctx.chat.id);
-    await ctx.answerCallbackQuery('Отменено');
-    await ctx.editMessageText('Запись отменена. Можете начать заново кнопкой внизу.');
-  });
-
-  // ============================================================
-  //  /start — вход
-  // ============================================================
-  bot.command('start', async ctx => {
-    touchUser(ctx);
-    const payload = (ctx.match || '').trim();
-
-    // пришёл по ссылке с сайта — подключаем напоминание
-    if (payload && payload.startsWith('B')) {
-      const b = db.bookings.find(x => x.id === payload);
-      if (!b) return ctx.reply('Не нашёл такую запись. Возможно, она уже отменена.', { reply_markup: clientKb() });
-      b.chatId = ctx.chat.id;
-      save();
-      return ctx.reply(
-        `Готово! Напомню за 2 часа до визита.\n\n` +
-        `${serviceName(b.service)}\nМастер: ${masterName(b.master)}\n${T.prettyDate(b.date)}, ${b.time}`,
-        { reply_markup: clientKb() }
-      );
-    }
-
-    if (isAdmin(ctx.from.id)) {
-      return ctx.reply(`Панель управления · ${db.salon.name}\n\nВыбирайте кнопками внизу.`,
-        { reply_markup: adminKb() });
-    }
-
-    return ctx.reply(
-      `Здравствуйте! Это запись в студию ${db.salon.name}.\n\n` +
-      `Нажмите «Записаться» — это меньше минуты.`,
-      { reply_markup: clientKb() }
-    );
-  });
-
-  // ============================================================
-  //  ОБРАБОТКА НАЖАТИЙ НА КНОПКИ ВНИЗУ + ввод имени/телефона
-  // ============================================================
-  // ============================================================
-  //  РАССЫЛКА: админ пишет одно сообщение — оно уходит всем клиентам
-  // ============================================================
-  const bcast = new Map();                       // чат админа -> черновик рассылки
-  const adminIn = new Map();                     // чат админа -> что сейчас вводит (заметка, поиск)
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  // запоминаем всех, кто писал боту
-  function touchUser(ctx) {
-    const id = ctx.chat && ctx.chat.id;
-    if (!id || (ctx.chat.type && ctx.chat.type !== 'private')) return;
-    const now = new Date().toISOString();
-    let u = db.users.find(x => x.id === id);
-    if (!u) {
-      u = { id, name: '', username: '', since: now, lastSeen: now, blocked: false };
-      db.users.push(u);
-    } else if (u.lastSeen && now.slice(0, 13) === u.lastSeen.slice(0, 13) && !u.blocked) {
-      return;                                     // в этот же час уже отмечали — не трогаем файл
-    }
-    if (ctx.from) {
-      u.name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || u.name;
-      u.username = ctx.from.username || u.username;
-    }
-    u.lastSeen = now;
-    u.blocked = false;
-    save();
-  }
-
-  // кому отправляем: все, кто писал боту, плюс те, кто пришёл по ссылке с сайта
-  function audience() {
-    const out = new Map();
-    db.users.forEach(u => { if (!isAdmin(u.id) && !u.blocked) out.set(u.id, u); });
-    const blocked = new Set(db.users.filter(u => u.blocked).map(u => u.id));
-    db.bookings.forEach(b => {
-      if (b.chatId && !isAdmin(b.chatId) && !blocked.has(b.chatId) && !out.has(b.chatId))
-        out.set(b.chatId, { id: b.chatId, name: b.name });
-    });
-    return [...out.values()];
-  }
-
-  bot.on('message', async (ctx, next) => {
-    touchUser(ctx);
-
-    // --- админ вводит заметку или ищет клиента ---
-    const inp = adminIn.get(ctx.chat.id);
-    if (inp && isAdmin(ctx.from.id) && ctx.message.text) {
-      const val = ctx.message.text.trim();
-      if (Object.values(BTN).includes(val) || val.startsWith('/')) {
-        adminIn.delete(ctx.chat.id);
-        return next();
-      }
-      adminIn.delete(ctx.chat.id);
-
-      if (inp.kind === 'note') {
-        if (val === '-') delete db.clients[inp.key];
-        else db.clients[inp.key] = { note: val.slice(0, 400), updatedAt: new Date().toISOString() };
-        save();
-        const v = viewClient(inp.key);
-        return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
-      }
-
-      if (inp.kind === 'search') {
-        const q = val.toLowerCase();
-        const qd = digits(val);
-        const found = clientsSorted().filter(c =>
-          (c.name || '').toLowerCase().includes(q) || (qd && c.key.includes(qd)));
-        if (!found.length) {
-          return ctx.reply('Никого не нашёл. Попробуйте по-другому.',
-            { reply_markup: new InlineKeyboard().text('‹ К списку', 'ac_l_0') });
-        }
-        const v = viewClients(0, found);
-        return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
-      }
-    }
-
-    const st = bcast.get(ctx.chat.id);
-    if (!st || !isAdmin(ctx.from.id)) return next();
-
-    const txt = ctx.message.text ? ctx.message.text.trim() : '';
-    if (txt && (Object.values(BTN).includes(txt) || txt.startsWith('/'))) {
-      bcast.delete(ctx.chat.id);                  // нажал другую кнопку — выходим из рассылки
-      return next();
-    }
-
-    const people = audience();
-    bcast.set(ctx.chat.id, { msgId: ctx.message.message_id, ready: true });
-
-    if (!people.length) {
-      bcast.delete(ctx.chat.id);
-      return ctx.reply('Пока некому отправлять: ни один клиент не писал боту.',
-        { reply_markup: adminKb() });
-    }
-
-    await ctx.reply(
-      `👆 Вот так это увидят клиенты.\n\nПолучателей: <b>${people.length}</b>`,
-      {
-        parse_mode: 'HTML',
-        reply_markup: new InlineKeyboard()
-          .text(`📣 Отправить (${people.length})`, 'bc_send').row()
-          .text('Отмена', 'bc_cancel'),
-      }
-    );
-  });
-
-  bot.callbackQuery('bc_cancel', async ctx => {
-    bcast.delete(ctx.chat.id);
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText('Рассылка отменена.');
-  });
-
-  bot.callbackQuery('bc_send', async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    const st = bcast.get(ctx.chat.id);
-    if (!st || !st.ready) {
-      await ctx.answerCallbackQuery({ text: 'Сообщение потерялось, начните заново', show_alert: true });
-      return;
-    }
-    bcast.delete(ctx.chat.id);
-    await ctx.answerCallbackQuery();
-
-    const people = audience();
-    await ctx.editMessageText(`Отправляю… 0 из ${people.length}`);
-
-    let ok = 0, fail = 0;
-    for (const p of people) {
-      try {
-        await bot.api.copyMessage(p.id, ctx.chat.id, st.msgId);
-        ok++;
-      } catch (e) {
-        fail++;
-        if (/blocked|deactivated|chat not found|user is deactivated/i.test(e.message || '')) {
-          let u = db.users.find(x => x.id === p.id);
-          if (!u) { u = { id: p.id, since: new Date().toISOString() }; db.users.push(u); }
-          u.blocked = true;
-        }
-        const wait = e.parameters && e.parameters.retry_after;
-        if (wait) await sleep((wait + 1) * 1000);
-      }
-      await sleep(40);                             // ~25 сообщений в секунду — лимит телеграма
-      if ((ok + fail) % 25 === 0) {
-        try { await ctx.editMessageText(`Отправляю… ${ok + fail} из ${people.length}`); } catch (e) {}
-      }
-    }
-    save();
-    log(`рассылка: ${ok} доставлено, ${fail} нет`);
-
-    await ctx.reply(
-      `Готово.\n\nДоставлено: <b>${ok}</b>` +
-      (fail ? `\nНе дошло: ${fail} — эти люди заблокировали бота.` : ''),
-      { parse_mode: 'HTML', reply_markup: adminKb() }
-    );
-  });
-
-  bot.on('message:contact', async ctx => {
-    const d = draft.get(ctx.chat.id);
-    if (!d || d.step !== 'phone') return;
-    d.phone = ctx.message.contact.phone_number;
-    d.step = 'confirm';
-    draft.set(ctx.chat.id, d);
-    await askConfirm(ctx, d);
-  });
-
-  async function askConfirm(ctx, d) {
-    const kb = new InlineKeyboard()
-      .text('✅ Подтвердить', 'bk_confirm').row()
-      .text('Отменить', 'bk_cancel');
-    await ctx.reply(
-      `<b>Проверьте, всё ли верно</b>\n\n` +
-      `Услуга: ${esc(serviceName(d.services))}\n` +
-      `Мастер: ${esc(masterName(d.master))}\n` +
-      `Когда: <b>${T.prettyDate(d.date)}, ${d.time}</b> · ${T.totalDuration(db, d.services)} мин\n` +
-      `Сумма: ${money(servicePrice(d.services))} сум\n` +
-      `Имя: ${esc(d.name)}\nТелефон: ${esc(d.phone)}`,
-      { parse_mode: 'HTML', reply_markup: kb }
-    );
-  }
-
-  bot.on('message:text', async ctx => {
-    const txt = ctx.message.text.trim();
-    const admin = isAdmin(ctx.from.id);
-
-    // --- сначала: идёт ли сейчас ввод имени/телефона ---
-    const d = draft.get(ctx.chat.id);
-    if (d && d.step === 'name' && !Object.values(BTN).includes(txt)) {
-      d.name = txt; d.step = 'phone';
-      draft.set(ctx.chat.id, d);
-      const kb = new Keyboard().requestContact('📱 Отправить мой номер').resized().oneTime();
-      return ctx.reply(
-        `Приятно познакомиться, ${esc(txt)}!\n\nТеперь номер телефона — нажмите кнопку или напишите вручную.`,
-        { parse_mode: 'HTML', reply_markup: kb }
-      );
-    }
-    if (d && d.step === 'phone' && !Object.values(BTN).includes(txt)) {
-      d.phone = txt; d.step = 'confirm';
-      draft.set(ctx.chat.id, d);
-      await ctx.reply('Принято', { reply_markup: kbFor(ctx.from.id) });
-      return askConfirm(ctx, d);
-    }
-
-    // --- кнопки клиента ---
-    if (txt === BTN.book) return startBooking(ctx);
-
-    if (txt === BTN.mine) {
-      const v = viewMine(ctx.chat.id);
-      return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
-    }
-    if (txt === BTN.contacts) {
-      const v = viewContacts();
-      const opt = { parse_mode: 'HTML' };
-      if (v.kb) opt.reply_markup = v.kb;           // кнопка «Связаться с мастером», если задан telegram
-      return ctx.reply(v.text, opt);
-    }
-
-    // --- кнопки админа ---
-    if (admin) {
-      if (txt === BTN.books)    { const v = viewBooks();    return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-      if (txt === BTN.sched)    { const v = viewMasters();  return ctx.reply(v.text, { reply_markup: v.kb }); }
-      if (txt === BTN.clients)  { const v = viewClients(0); return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
-      if (txt === BTN.stats)    { const v = viewStats();    return ctx.reply(v.text, { parse_mode: 'HTML' }); }
-      if (txt === BTN.settings) { const v = viewSettings(); return ctx.reply(v.text, { parse_mode: 'HTML' }); }
-      if (txt === BTN.export)   return exportCsv(ctx);
-      if (txt === BTN.bcast) {
-        const n = audience().length;
-        bcast.set(ctx.chat.id, {});
-        return ctx.reply(
-          `<b>Рассылка</b>\n\n` +
-          `Пришлите сообщение — текст, фото, видео, что угодно. Я покажу, как оно будет выглядеть, ` +
-          `и спрошу подтверждение.\n\n` +
-          `Сейчас получателей: <b>${n}</b>\n` +
-          `<i>Это те, кто когда-либо писал боту.</i>`,
-          { parse_mode: 'HTML' }
-        );
-      }
-    }
-
-    // --- всё остальное ---
-    return ctx.reply('Выбирайте кнопками внизу 👇', { reply_markup: kbFor(ctx.from.id) });
-  });
-
-  // ============================================================
-  //  АДМИН: расписание
-  // ============================================================
-  bot.callbackQuery(/^a_sm_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    const mid = ctx.match[1];
-    const kb = new InlineKeyboard();
-    T.dateRange(10).forEach((d, i) => {
-      kb.text(T.shortDate(d), `a_sd_${mid}_${d}`);
-      if (i % 3 === 2) kb.row();
-    });
-    await ctx.editMessageText(`${masterName(mid)} — выберите день:`, { reply_markup: kb });
-  });
-
-  bot.callbackQuery(/^a_sd_([^_]+)_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    await showDay(ctx, ctx.match[1], ctx.match[2]);
-  });
-
-  async function showDay(ctx, mid, date) {
-    const slots = T.daySlots(db, mid, date);
-    const kb = new InlineKeyboard();
-    slots.forEach((s, i) => {
-      const mark = s.state === 'booked' ? '🔴' : s.state === 'closed' ? '⚪️' : '🟢';
-      kb.text(`${mark} ${s.time}`, s.state === 'booked' ? 'a_noop' : `a_tg_${mid}_${date}_${s.time}`);
-      if (i % 4 === 3) kb.row();
-    });
-    const openCount = slots.filter(x => x.state === 'free').length;
-    const booked = slots.filter(x => x.state === 'booked').length;
-
-    kb.row();
-    if (openCount) kb.text('🚫 Закрыть день', `a_dall_${mid}_${date}`);
-    if (openCount < slots.length - booked) kb.text('✅ Открыть день', `a_dnone_${mid}_${date}`);
-    kb.row().text('← К мастерам', 'a_sched_back');
-
-    const text = `<b>${masterName(mid)} · ${T.prettyDate(date)}</b>\n\n` +
-                 `🟢 свободно · ⚪️ закрыто · 🔴 занято\n` +
-                 (booked ? `\n<b>Записей на этот день: ${booked}</b> — они остаются, их нужно перенести отдельно.\n` : '') +
-                 `\nНажмите на время, чтобы открыть или закрыть окно.`;
-    try { await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb }); } catch (e) {}
-  }
-
-  bot.callbackQuery('a_sched_back', async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    await ctx.answerCallbackQuery();
-    const v = viewMasters();
-    await ctx.editMessageText(v.text, { reply_markup: v.kb });
-  });
-
-  bot.callbackQuery('a_noop', ctx => ctx.answerCallbackQuery('Это время занято записью'));
-
-  bot.callbackQuery(/^a_tg_([^_]+)_([^_]+)_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    const [, mid, date, time] = ctx.match;
-    db.closed[mid] = db.closed[mid] || {};
-    db.closed[mid][date] = db.closed[mid][date] || [];
-    const arr = db.closed[mid][date];
-    const i = arr.indexOf(time);
-    if (i >= 0) arr.splice(i, 1); else arr.push(time);
-    save();
-    await ctx.answerCallbackQuery(i >= 0 ? 'Открыто' : 'Закрыто');
-    await showDay(ctx, mid, date);
-  });
-
-  // закрыть весь день одной кнопкой
-  bot.callbackQuery(/^a_dall_([^_]+)_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    const [, mid, date] = ctx.match;
-    db.closed[mid] = db.closed[mid] || {};
-    db.closed[mid][date] = T.daySlots(db, mid, date)
-      .filter(s => s.state !== 'booked')
-      .map(s => s.time);
-    save();
-    const booked = T.daySlots(db, mid, date).filter(s => s.state === 'booked').length;
-    await ctx.answerCallbackQuery(booked ? `День закрыт. Записей на нём: ${booked}` : 'День закрыт');
-    await showDay(ctx, mid, date);
-  });
-
-  // открыть весь день обратно
-  bot.callbackQuery(/^a_dnone_([^_]+)_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    const [, mid, date] = ctx.match;
-    if (db.closed[mid]) delete db.closed[mid][date];
-    save();
-    await ctx.answerCallbackQuery('День открыт');
-    await showDay(ctx, mid, date);
-  });
-
-  // АДМИН: отмена записи
-  bot.callbackQuery(/^a_cancel_(.+)$/, async ctx => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
-    const b = db.bookings.find(x => x.id === ctx.match[1]);
-    if (!b) return ctx.answerCallbackQuery('Не найдено');
-    b.status = 'cancelled';
-    save();
-    await ctx.answerCallbackQuery('Отменено');
-    if (b.chatId) {
-      try {
-        await bot.api.sendMessage(b.chatId,
-          `К сожалению, запись на ${T.prettyDate(b.date)} в ${b.time} отменена. Напишите нам, чтобы перенести.`);
-      } catch (e) {}
-    }
-    const v = viewBooks();
-    await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
-  });
-
-  // ============================================================
-  //  КЛИЕНТ: подтверждение и отмена из напоминания
-  // ============================================================
-  bot.callbackQuery(/^cl_(ok|no)_(.+)$/, async ctx => {
-    const [, action, id] = ctx.match;
-    const b = db.bookings.find(x => x.id === id);
-    if (!b) return ctx.answerCallbackQuery('Запись не найдена');
-
-    if (action === 'ok') {
-      b.confirmed = true;
-      save();
-      await ctx.answerCallbackQuery('Спасибо, ждём вас!');
-      await ctx.editMessageText('Спасибо, ждём вас! 🙌');
-      notifyAdmins(`✅ ${esc(b.name)} подтвердил визит — ${T.prettyDate(b.date)}, ${b.time}`);
-    } else {
-      b.status = 'cancelled';
-      save();
-      await ctx.answerCallbackQuery('Запись отменена');
-      await ctx.editMessageText('Запись отменена. Будем рады видеть вас в другой раз.');
-      notifyAdmins(
-        `❌ <b>Отмена</b>\n${esc(b.name)} — ${esc(serviceName(b.service))}\n` +
-        `${T.prettyDate(b.date)}, ${b.time}\nОкно снова свободно.`
-      );
-    }
-  });
-
-  // ============================================================
-  //  НАПОМИНАНИЯ ЗА 2 ЧАСА
-  // ============================================================
-  setInterval(async () => {
-    const now = T.nowTashkent();
-    for (const b of db.bookings) {
-      if (b.status !== 'active' || !b.chatId || b.remindedAt) continue;
-      if (b.date !== now.date) continue;
-
-      const diff = T.toMin(b.time) - now.min;
-      if (diff <= 120 && diff > 0) {
-        try {
-          await bot.api.sendMessage(b.chatId,
-            `Напоминаем о визите сегодня в <b>${b.time}</b>\n\n` +
-            `${esc(serviceName(b.service))}\nМастер: ${esc(masterName(b.master))}\n\nВсё в силе?`,
-            {
-              parse_mode: 'HTML',
-              reply_markup: new InlineKeyboard()
-                .text('Приду', `cl_ok_${b.id}`)
-                .text('Не смогу', `cl_no_${b.id}`),
-            });
-          b.remindedAt = new Date().toISOString();
-          save();
-        } catch (e) { console.error('Напоминание не ушло:', e.message); }
-      }
-    }
-  }, 60000);
-  // ============================================================
-  //  НАПОМИНАНИЕ О ПОВТОРНОЙ ЗАПИСИ
-  //  Через N дней после визита бот пишет: пора обновить?
-  //  Срок берём из salons/<id>.json: salon.rebookDays (по умолчанию 14).
-  //  Для отдельной услуги можно задать свой: services[].rebookDays
-  // ============================================================
-  function plural(n, one, few, many) {
-    const a = Math.abs(n) % 100, b = a % 10;
-    if (a > 10 && a < 20) return many;
-    if (b > 1 && b < 5) return few;
-    if (b === 1) return one;
-    return many;
-  }
-
-  function daysBetween(from, to) {
-    return Math.round((new Date(to + 'T00:00:00Z') - new Date(from + 'T00:00:00Z')) / 86400000);
-  }
-
-  // через сколько дней напоминать по этой записи
-  function rebookDaysFor(b) {
-    const base = Number(db.salon.rebookDays || 0);
-    let n = 0;
-    T.svcIds(b.services || b.service).forEach(id => {
-      const s = db.services.find(x => x.id === id);
-      if (s && s.rebookDays) n = Math.max(n, Number(s.rebookDays));
-    });
-    return n || base;
-  }
-
-  async function rebookPass() {
-    const now = T.nowTashkent();
-    const hour = Number(db.salon.rebookHour != null ? db.salon.rebookHour : 12);
-    if (now.min < hour * 60) return;              // рано, ждём до полудня
-
-    for (const b of db.bookings) {
-      if (b.status !== 'active' || !b.chatId || b.rebookSentAt) continue;
-
-      const need = rebookDaysFor(b);
-      if (!need) continue;
-
-      const passed = daysBetween(b.date, now.date);
-      if (passed < need || passed > need + 3) continue;   // окно: день в день и три дня на догон
-
-      // не трогаем тех, кто уже записан наперёд
-      const hasNext = db.bookings.some(x =>
-        x.chatId === b.chatId && x.status === 'active' && x.date > b.date);
-      if (hasNext) { b.rebookSentAt = 'skip'; save(); continue; }
-
-      // клиент мог попросить не напоминать
-      const u = db.users.find(x => x.id === b.chatId);
-      if (u && u.noRebook) { b.rebookSentAt = 'off'; save(); continue; }
-
-      const name = (b.name || '').split(' ')[0];
-      try {
-        await bot.api.sendMessage(b.chatId,
-          (name ? `${esc(name)}, здравствуйте!\n\n` : 'Здравствуйте!\n\n') +
-          `Прошло ${passed} ${plural(passed, 'день', 'дня', 'дней')} с вашего визита — ` +
-          `${esc(serviceName(b.service))}.\n` +
-          `Если пора обновить, можно записаться прямо здесь.`,
-          {
-            parse_mode: 'HTML',
-            reply_markup: new InlineKeyboard()
-              .text('📅 Записаться', 'rb_go').row()
-              .text('Не напоминать', 'rb_off'),
-          });
-        // помечаем всю цепочку визита, чтобы не написать дважды
-        db.bookings.forEach(x => {
-          if (x === b || (b.group && x.group === b.group)) x.rebookSentAt = new Date().toISOString();
-        });
-        save();
-        log('напомнил о повторной записи:', b.chatId);
-      } catch (e) {
-        b.rebookSentAt = 'error';
-        if (/blocked|deactivated|chat not found/i.test(e.message || '')) {
-          let uu = db.users.find(x => x.id === b.chatId);
-          if (!uu) { uu = { id: b.chatId, since: new Date().toISOString() }; db.users.push(uu); }
-          uu.blocked = true;
-        }
-        save();
-      }
-      await sleep(60);
-    }
-  }
-
-  bot.callbackQuery('rb_go', async ctx => {
-    await ctx.answerCallbackQuery();
-    try { await ctx.editMessageReplyMarkup(); } catch (e) {}
-    return startBooking(ctx);
-  });
-
-  bot.callbackQuery('rb_off', async ctx => {
-    await ctx.answerCallbackQuery();
-    let u = db.users.find(x => x.id === ctx.chat.id);
-    if (!u) { u = { id: ctx.chat.id, since: new Date().toISOString() }; db.users.push(u); }
-    u.noRebook = true;
-    save();
-    try { await ctx.editMessageReplyMarkup(); } catch (e) {}
-    await ctx.reply('Хорошо, больше не буду напоминать. Записаться всегда можно кнопкой внизу.',
-      { reply_markup: clientKb() });
-  });
-
-  setInterval(() => { rebookPass().catch(e => console.error('повторная запись:', e.message)); }, 10 * 60000);
-
-  // ---------- запуск ----------
-  bot.catch(err => console.error(`[${cfg.id}] ошибка бота:`, err));
-  bot.api.setMyCommands([{ command: 'start', description: 'Начать' }]).catch(() => {});
-  bot.start();
-  log('бот запущен ·', db.salon.name);
-
-  // то, что нужно снаружи (для сайта)
-  return {
-    id: cfg.id,
-    name: db.salon.name,
-    username: BOT_USERNAME,
-    db, save,
-    createBooking, rebookPass,
-    serviceName, masterName, servicePrice,
-  };
-};
+  ]
+}
