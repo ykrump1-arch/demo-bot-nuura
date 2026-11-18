@@ -168,12 +168,36 @@ module.exports = function createSalon(cfg) {
   //  Заметка живёт в db.clients[телефон].note
   // ============================================================
   const digits = v => String(v || '').replace(/\D/g, '');
+  // один человек = один номер: сравниваем по последним 9 цифрам (+998, пробелы и скобки не важны)
+  const phoneKey = v => { const d = digits(v); return d.length >= 9 ? d.slice(-9) : d; };
+  const fmtPhone = k => k.length === 9
+    ? `+998 ${k.slice(0, 2)} ${k.slice(2, 5)} ${k.slice(5, 7)} ${k.slice(7)}` : k;
   const PER_PAGE = 8;
+
+  // старые заметки хранились под полным номером — переносим под новый ключ (один раз при запуске)
+  (function migrateClientKeys() {
+    let moved = 0;
+    Object.keys(db.clients).forEach(k => {
+      const nk = phoneKey(k);
+      if (nk && nk !== k) {
+        db.clients[nk] = Object.assign({}, db.clients[k], db.clients[nk] || {});
+        delete db.clients[k];
+        moved++;
+      }
+    });
+    if (moved) { save(); log('перенёс заметки клиентов:', moved); }
+  })();
 
   function clientsIndex() {
     const map = new Map();
+    // сначала — загруженная база (у кого есть имя/телефон, но ещё нет записей)
+    Object.entries(db.clients).forEach(([key, c]) => {
+      if (!c || !c.phone) return;
+      map.set(key, { key, name: c.name || '', phone: c.phone, count: 0, cancelled: 0, sum: 0,
+                     first: '', last: '', visits: [], imported: true });
+    });
     db.bookings.forEach(b => {
-      const key = digits(b.phone);
+      const key = phoneKey(b.phone);
       if (!key) return;
       if (!map.has(key)) {
         map.set(key, { key, name: b.name, phone: b.phone, count: 0, cancelled: 0, sum: 0,
@@ -182,8 +206,8 @@ module.exports = function createSalon(cfg) {
       const c = map.get(key);
       c.visits.push(b);
       if (b.status === 'active') { c.count++; c.sum += b.price || 0; } else c.cancelled++;
-      if (b.date > c.last) { c.last = b.date; c.name = b.name || c.name; }
-      if (b.date < c.first) c.first = b.date;
+      if (b.date > c.last) { c.last = b.date; if (!c.imported) c.name = b.name || c.name; }
+      if (!c.first || b.date < c.first) c.first = b.date;
     });
     return map;
   }
@@ -217,6 +241,7 @@ module.exports = function createSalon(cfg) {
       kb.row();
     }
     kb.text('🔎 Найти клиента', 'ac_find');
+    if (!found) kb.row().text('📥 Загрузить базу', 'ac_imp');
     return { text, kb };
   }
 
@@ -236,7 +261,9 @@ module.exports = function createSalon(cfg) {
     const past0 = c.visits.filter(b => b.date <= today).map(b => b.date).sort();
     text += past0.length
       ? `Первый визит: ${T.shortDate(past0[0])} · последний: ${T.shortDate(past0[past0.length - 1])}\n`
-      : `Ещё не приходил(а)\n`;
+      : (c.imported
+          ? (c.visits.length ? `Из старой базы\n` : `Из старой базы · онлайн ещё не записывался(ась)\n`)
+          : `Ещё не приходил(а)\n`);
     if (c.cancelled) text += `Отмен: ${c.cancelled}\n`;
     if (next) text += `\n📅 Записан: <b>${T.prettyDate(next.date)}, ${next.time}</b>\n`;
 
@@ -292,6 +319,42 @@ module.exports = function createSalon(cfg) {
   });
 
   bot.callbackQuery('ac_noop', ctx => ctx.answerCallbackQuery());
+
+  bot.callbackQuery('ac_imp', async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    adminIn.set(ctx.chat.id, { kind: 'import' });
+    await ctx.reply(
+      `<b>Загрузка базы клиентов</b>\n\n` +
+      `Пришлите список одним сообщением — каждый клиент с новой строки, имя и номер:\n\n` +
+      `<code>Оксана 88 100 80 82\nМалика +998 93 540 39 89</code>\n\n` +
+      `Номер можно писать как угодно — с +998 или без, с пробелами. ` +
+      `Кто уже есть в базе — не задвоится.`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  // разбор присланного списка: «Имя ... номер» в каждой строке
+  function importClients(raw) {
+    let added = 0, updated = 0;
+    const bad = [];
+    String(raw).split(/\r?\n/).forEach(line0 => {
+      // убираем шапку пересланного сообщения вида «[18.11.2026 10:05] Имя:»
+      const line = line0.replace(/^\s*\[[^\]]*\]\s*[^:]{0,40}:\s*/, '').trim();
+      if (!line) return;
+      const key = phoneKey(line);
+      if (key.length !== 9) { bad.push(line0.trim()); return; }
+      const name = line.replace(/\+?\d[\d\s()\-]*\d/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const cur = db.clients[key];
+      if (cur && cur.phone) { if (!cur.name && name) cur.name = name; updated++; return; }
+      db.clients[key] = Object.assign({}, cur || {}, {
+        name: name || 'Без имени', phone: fmtPhone(key), importedAt: new Date().toISOString(),
+      });
+      added++;
+    });
+    save();
+    return { added, updated, bad };
+  }
 
   bot.callbackQuery('ac_find', async ctx => {
     if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
@@ -702,9 +765,23 @@ module.exports = function createSalon(cfg) {
       }
       adminIn.delete(ctx.chat.id);
 
+      if (inp.kind === 'import') {
+        const r = importClients(ctx.message.text);
+        log(`загрузка базы: +${r.added}, уже были ${r.updated}, не понял ${r.bad.length}`);
+        let msg = `✅ Готово\n\nДобавлено новых: <b>${r.added}</b>\nУже были в базе: ${r.updated}`;
+        if (r.bad.length) msg += `\n\nНе нашёл номер в строках (${r.bad.length}):\n` +
+          r.bad.slice(0, 15).map(x => '• ' + esc(x.slice(0, 60))).join('\n');
+        return ctx.reply(msg, { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('👥 К списку клиентов', 'ac_l_0') });
+      }
+
       if (inp.kind === 'note') {
-        if (val === '-') delete db.clients[inp.key];
-        else db.clients[inp.key] = { note: val.slice(0, 400), updatedAt: new Date().toISOString() };
+        const cur = db.clients[inp.key] || {};
+        if (val === '-') {
+          delete cur.note;
+          if (cur.phone) db.clients[inp.key] = cur; else delete db.clients[inp.key];
+        } else {
+          db.clients[inp.key] = Object.assign(cur, { note: val.slice(0, 400), updatedAt: new Date().toISOString() });
+        }
         save();
         const v = viewClient(inp.key);
         return ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb });
