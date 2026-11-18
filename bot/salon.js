@@ -111,6 +111,8 @@ module.exports = function createSalon(cfg) {
       createdAt: new Date().toISOString(),
     };
     db.bookings.push(booking);
+    const ck = phoneKey(booking.phone);           // удалённый клиент записался снова — возвращаем в список
+    if (ck && db.clients[ck] && db.clients[ck].hidden) delete db.clients[ck];
     save();
 
     notifyAdmins(
@@ -191,14 +193,15 @@ module.exports = function createSalon(cfg) {
   function clientsIndex() {
     const map = new Map();
     // сначала — загруженная база (у кого есть имя/телефон, но ещё нет записей)
+    const hidden = k => db.clients[k] && db.clients[k].hidden;
     Object.entries(db.clients).forEach(([key, c]) => {
-      if (!c || !c.phone) return;
+      if (!c || !c.phone || c.hidden) return;
       map.set(key, { key, name: c.name || '', phone: c.phone, count: 0, cancelled: 0, sum: 0,
                      first: '', last: '', visits: [], imported: true });
     });
     db.bookings.forEach(b => {
       const key = phoneKey(b.phone);
-      if (!key) return;
+      if (!key || hidden(key)) return;
       if (!map.has(key)) {
         map.set(key, { key, name: b.name, phone: b.phone, count: 0, cancelled: 0, sum: 0,
                        first: b.date, last: b.date, visits: [] });
@@ -284,6 +287,7 @@ module.exports = function createSalon(cfg) {
 
     const kb = new InlineKeyboard()
       .text(note ? '📝 Изменить заметку' : '📝 Добавить заметку', `ac_n_${key}`).row()
+      .text('🗑 Удалить клиента', `ac_d_${key}`).row()
       .text('‹ К списку', 'ac_l_0');
     return { text, kb };
   }
@@ -319,6 +323,43 @@ module.exports = function createSalon(cfg) {
   });
 
   bot.callbackQuery('ac_noop', ctx => ctx.answerCallbackQuery());
+
+  // удалить клиента: сначала подтверждение
+  bot.callbackQuery(/^ac_d_(\d+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
+    const key = ctx.match[1];
+    const c = clientsIndex().get(key);
+    if (!c) return ctx.editMessageText('Клиент уже удалён.', { reply_markup: new InlineKeyboard().text('‹ К списку', 'ac_l_0') });
+
+    const today = T.nowTashkent().date;
+    const future = c.visits.filter(b => b.status === 'active' && b.date >= today);
+    if (future.length) {
+      return ctx.editMessageText(
+        `У клиента <b>${esc(c.name || 'Без имени')}</b> есть запись: ` +
+        `${T.prettyDate(future[0].date)}, ${future[0].time}.\n\n` +
+        `Сначала отмените её в «📋 Записи», потом удалите клиента.`,
+        { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('‹ Назад', `ac_c_${key}`) });
+    }
+    await ctx.editMessageText(
+      `Удалить <b>${esc(c.name || 'Без имени')}</b> (${esc(c.phone)}) из списка клиентов?\n\n` +
+      `<i>Заметка тоже удалится. Прошлые визиты останутся в статистике и выгрузке.</i>`,
+      { parse_mode: 'HTML', reply_markup: new InlineKeyboard()
+          .text('🗑 Да, удалить', `ac_dy_${key}`).row()
+          .text('Отмена', `ac_c_${key}`) });
+  });
+
+  bot.callbackQuery(/^ac_dy_(\d+)$/, async ctx => {
+    if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
+    const key = ctx.match[1];
+    db.clients[key] = { hidden: true, deletedAt: new Date().toISOString() };
+    save();
+    log('удалил клиента', key);
+    await ctx.answerCallbackQuery('Клиент удалён');
+    const v = viewClients(0);
+    try { await ctx.editMessageText(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+    catch (e) { await ctx.reply(v.text, { parse_mode: 'HTML', reply_markup: v.kb }); }
+  });
 
   bot.callbackQuery('ac_imp', async ctx => {
     if (!isAdmin(ctx.from.id)) return ctx.answerCallbackQuery();
